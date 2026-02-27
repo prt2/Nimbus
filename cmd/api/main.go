@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/prt2/nimbus/internal/billing"
 	"github.com/prt2/nimbus/internal/controller"
 	"github.com/prt2/nimbus/internal/scheduler"
 	"github.com/prt2/nimbus/internal/tenant"
@@ -17,6 +18,7 @@ import (
 type server struct {
 	tenants     *tenant.Store
 	provisioner *tenant.Provisioner
+	billing     *billing.Engine
 }
 
 func main() {
@@ -35,21 +37,28 @@ func main() {
 		log.Fatalf("Failed to create scheduler: %v", err)
 	}
 
-	// Both controller and scheduler run as background goroutines
-	// This is the power of Go concurrency — they run truly in parallel
+	billingEngine, err := billing.NewEngine()
+	if err != nil {
+		log.Fatalf("Failed to create billing engine: %v", err)
+	}
+
 	ctx := context.Background()
 	go ctrl.Start(ctx)
 	go sched.Start(ctx)
+	go billingEngine.Start(ctx)
 
 	srv := &server{
 		tenants:     tenant.NewStore(),
 		provisioner: provisioner,
+		billing:     billingEngine,
 	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", healthHandler)
 	mux.HandleFunc("/tenants", srv.handleTenants)
 	mux.HandleFunc("/tenants/", srv.handleTenantByID)
+	mux.HandleFunc("/billing/usage", srv.handleUsage)
+	mux.HandleFunc("/billing/invoice/", srv.handleInvoice)
 
 	httpServer := &http.Server{
 		Addr:         ":8080",
@@ -140,6 +149,32 @@ func (s *server) handleTenantByID(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 	}
+}
+
+// handleUsage returns current resource usage for all tenants
+func (s *server) handleUsage(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	usage := s.billing.GetAllUsage()
+	writeJSON(w, http.StatusOK, usage)
+}
+
+// handleInvoice generates an invoice for a specific tenant
+// GET /billing/invoice/acme-corp
+func (s *server) handleInvoice(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	tenantID := strings.TrimPrefix(r.URL.Path, "/billing/invoice/")
+	if tenantID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing tenant id"})
+		return
+	}
+	invoice := s.billing.GenerateInvoice(tenantID)
+	writeJSON(w, http.StatusOK, invoice)
 }
 
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {
