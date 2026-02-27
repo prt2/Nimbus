@@ -11,6 +11,7 @@ import (
 
 	"github.com/prt2/nimbus/internal/billing"
 	"github.com/prt2/nimbus/internal/controller"
+	"github.com/prt2/nimbus/internal/middleware"
 	"github.com/prt2/nimbus/internal/scheduler"
 	"github.com/prt2/nimbus/internal/tenant"
 )
@@ -62,7 +63,7 @@ func main() {
 
 	httpServer := &http.Server{
 		Addr:         ":8080",
-		Handler:      mux,
+		Handler:      middleware.CORS(mux),
 		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 10 * time.Second,
 	}
