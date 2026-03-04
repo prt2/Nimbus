@@ -16,13 +16,20 @@ import (
 	"github.com/prt2/nimbus/internal/tenant"
 )
 
+const dbConnStr = "postgresql://nimbus:nimbus123@127.0.0.1:5432/nimbus?sslmode=disable"
+
 type server struct {
-	tenants     *tenant.Store
+	tenants     *tenant.DBStore
 	provisioner *tenant.Provisioner
 	billing     *billing.Engine
 }
 
 func main() {
+	dbStore, err := tenant.NewDBStore(dbConnStr)
+	if err != nil {
+		log.Fatalf("Failed to connect to database: %v", err)
+	}
+
 	provisioner, err := tenant.NewProvisioner()
 	if err != nil {
 		log.Fatalf("Failed to connect to Kubernetes: %v", err)
@@ -49,21 +56,24 @@ func main() {
 	go billingEngine.Start(ctx)
 
 	srv := &server{
-		tenants:     tenant.NewStore(),
+		tenants:     dbStore,
 		provisioner: provisioner,
 		billing:     billingEngine,
 	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", healthHandler)
+	mux.HandleFunc("/auth/token", srv.handleToken)
 	mux.HandleFunc("/tenants", srv.handleTenants)
 	mux.HandleFunc("/tenants/", srv.handleTenantByID)
 	mux.HandleFunc("/billing/usage", srv.handleUsage)
 	mux.HandleFunc("/billing/invoice/", srv.handleInvoice)
 
+	handler := middleware.CORS(middleware.Auth(mux))
+
 	httpServer := &http.Server{
 		Addr:         ":8080",
-		Handler:      middleware.CORS(mux),
+		Handler:      handler,
 		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 10 * time.Second,
 	}
@@ -76,6 +86,27 @@ func main() {
 
 func healthHandler(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *server) handleToken(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	var req struct {
+		TenantID   string `json:"tenant_id"`
+		TenantName string `json:"tenant_name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body"})
+		return
+	}
+	token, err := middleware.GenerateToken(req.TenantID, req.TenantName)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to generate token"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"token": token})
 }
 
 func (s *server) handleTenants(w http.ResponseWriter, r *http.Request) {
@@ -152,18 +183,14 @@ func (s *server) handleTenantByID(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleUsage returns current resource usage for all tenants
 func (s *server) handleUsage(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
-	usage := s.billing.GetAllUsage()
-	writeJSON(w, http.StatusOK, usage)
+	writeJSON(w, http.StatusOK, s.billing.GetAllUsage())
 }
 
-// handleInvoice generates an invoice for a specific tenant
-// GET /billing/invoice/acme-corp
 func (s *server) handleInvoice(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
@@ -174,8 +201,7 @@ func (s *server) handleInvoice(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing tenant id"})
 		return
 	}
-	invoice := s.billing.GenerateInvoice(tenantID)
-	writeJSON(w, http.StatusOK, invoice)
+	writeJSON(w, http.StatusOK, s.billing.GenerateInvoice(tenantID))
 }
 
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {

@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, BarChart, Bar, Cell } from "recharts";
+import { login, fetchTenants, fetchUsage, fetchInvoice, createTenant, deleteTenant } from './api';
 
 const API = "http://localhost:8080";
 
@@ -189,36 +190,6 @@ const css = `
   .header-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 32px; }
   .empty { text-align: center; padding: 40px; color: ${theme.muted}; font-family: 'JetBrains Mono', monospace; font-size: 13px; }
 `;
-
-// ── API helpers ────────────────────────────────────────────────
-async function fetchTenants() {
-  const r = await fetch(`${API}/tenants`);
-  const d = await r.json();
-  return d.tenants || [];
-}
-
-async function fetchUsage() {
-  const r = await fetch(`${API}/billing/usage`);
-  return r.json();
-}
-
-async function fetchInvoice(id) {
-  const r = await fetch(`${API}/billing/invoice/${id}`);
-  return r.json();
-}
-
-async function createTenant(name, cpu, memory) {
-  const r = await fetch(`${API}/tenants`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name, cpu_quota: cpu, memory_quota: memory }),
-  });
-  return r.json();
-}
-
-async function deleteTenant(id) {
-  await fetch(`${API}/tenants/${id}`, { method: "DELETE" });
-}
 
 // ── Sidebar ────────────────────────────────────────────────────
 const PAGES = [
@@ -601,14 +572,15 @@ export default function App() {
   const [usage, setUsage] = useState({});
 
   const refresh = useCallback(async () => {
-    try {
-      const [t, u] = await Promise.all([fetchTenants(), fetchUsage()]);
-      setTenants(t);
-      setUsage(u);
-    } catch (e) {
-      console.error("API error:", e);
-    }
-  }, []);
+  try {
+    await login();
+    const [t, u] = await Promise.all([fetchTenants(), fetchUsage()]);
+    setTenants(t);
+    setUsage(u);
+  } catch (e) {
+    console.error("API error:", e);
+  }
+}, []);
 
   useEffect(() => {
     refresh();

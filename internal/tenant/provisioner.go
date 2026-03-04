@@ -4,13 +4,15 @@ import (
 	"context"
 	"fmt"
 
+	"path/filepath"
+
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/client-go/util/homedir"
-	"path/filepath"
 )
 
 // Provisioner talks to the Kubernetes API to create real infrastructure
@@ -52,7 +54,6 @@ func (p *Provisioner) createNamespace(ctx context.Context, t *Tenant) error {
 	ns := &corev1.Namespace{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: t.Namespace,
-			// Labels let us find all Nimbus namespaces later
 			Labels: map[string]string{
 				"managed-by":  "nimbus",
 				"tenant-id":   t.ID,
@@ -60,8 +61,10 @@ func (p *Provisioner) createNamespace(ctx context.Context, t *Tenant) error {
 			},
 		},
 	}
-
 	_, err := p.k8s.CoreV1().Namespaces().Create(ctx, ns, metav1.CreateOptions{})
+	if err != nil && errors.IsAlreadyExists(err) {
+		return nil // namespace already exists, that's fine
+	}
 	return err
 }
 
