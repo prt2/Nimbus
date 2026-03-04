@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/prt2/nimbus/internal/autoscaler"
 	"github.com/prt2/nimbus/internal/billing"
 	"github.com/prt2/nimbus/internal/controller"
 	"github.com/prt2/nimbus/internal/middleware"
@@ -50,10 +51,16 @@ func main() {
 		log.Fatalf("Failed to create billing engine: %v", err)
 	}
 
+	autoScaler, err := autoscaler.NewAutoscaler()
+	if err != nil {
+		log.Fatalf("Failed to create autoscaler: %v", err)
+	}
+
 	ctx := context.Background()
 	go ctrl.Start(ctx)
 	go sched.Start(ctx)
 	go billingEngine.Start(ctx)
+	go autoScaler.Start(ctx)
 
 	srv := &server{
 		tenants:     dbStore,
