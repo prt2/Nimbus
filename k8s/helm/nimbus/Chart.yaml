@@ -1,0 +1,14 @@
+apiVersion: v2
+name: nimbus
+description: A Kubernetes-based multi-tenant cloud control plane
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
+keywords:
+  - kubernetes
+  - cloud
+  - control-plane
+  - multi-tenant
+maintainers:
+  - name: prt2
+    url: https://github.com/prt2

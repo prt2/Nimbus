@@ -6,12 +6,15 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/prt2/nimbus/internal/autoscaler"
 	"github.com/prt2/nimbus/internal/billing"
 	"github.com/prt2/nimbus/internal/controller"
+	"github.com/prt2/nimbus/internal/metrics"
 	"github.com/prt2/nimbus/internal/middleware"
 	"github.com/prt2/nimbus/internal/scheduler"
 	"github.com/prt2/nimbus/internal/tenant"
@@ -75,8 +78,9 @@ func main() {
 	mux.HandleFunc("/tenants/", srv.handleTenantByID)
 	mux.HandleFunc("/billing/usage", srv.handleUsage)
 	mux.HandleFunc("/billing/invoice/", srv.handleInvoice)
+	mux.Handle("/metrics", promhttp.Handler())
 
-	handler := middleware.CORS(middleware.Auth(mux))
+	handler := middleware.CORS(middleware.Auth(metricsMiddleware(mux)))
 
 	httpServer := &http.Server{
 		Addr:         ":8080",
@@ -215,4 +219,26 @@ func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(v)
+}
+
+func metricsMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		rw := &responseWriter{ResponseWriter: w, status: 200}
+		next.ServeHTTP(rw, r)
+		duration := time.Since(start).Seconds()
+		status := strconv.Itoa(rw.status)
+		metrics.APIRequestsTotal.WithLabelValues(r.Method, r.URL.Path, status).Inc()
+		metrics.APIRequestDuration.WithLabelValues(r.Method, r.URL.Path).Observe(duration)
+	})
+}
+
+type responseWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+func (rw *responseWriter) WriteHeader(status int) {
+	rw.status = status
+	rw.ResponseWriter.WriteHeader(status)
 }

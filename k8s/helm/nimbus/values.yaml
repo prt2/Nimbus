@@ -1,0 +1,34 @@
+# Default values for Nimbus
+replicaCount: 1
+
+image:
+  repository: prt2/nimbus
+  pullPolicy: IfNotPresent
+  tag: "latest"
+
+api:
+  port: 8080
+  jwtSecret: "nimbus-super-secret-key-change-in-production"
+
+database:
+  host: postgres
+  port: 5432
+  name: nimbus
+  user: nimbus
+  password: nimbus123
+
+resources:
+  requests:
+    cpu: 250m
+    memory: 256Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+service:
+  type: ClusterIP
+  port: 8080
+
+ingress:
+  enabled: false
+  host: nimbus.local

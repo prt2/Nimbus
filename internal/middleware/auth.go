@@ -12,6 +12,7 @@ import (
 var jwtSecret = []byte("nimbus-super-secret-key-change-in-production")
 
 type contextKey string
+
 const TenantKey contextKey = "tenant"
 
 func GenerateToken(tenantID, tenantName string) (string, error) {
@@ -27,7 +28,8 @@ func GenerateToken(tenantID, tenantName string) (string, error) {
 
 func Auth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/health" || r.URL.Path == "/auth/token" {
+		// Skip auth for health check, token endpoint, and metrics
+		if r.URL.Path == "/health" || r.URL.Path == "/auth/token" || r.URL.Path == "/metrics" {
 			next.ServeHTTP(w, r)
 			return
 		}
