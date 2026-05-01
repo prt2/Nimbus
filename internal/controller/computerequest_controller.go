@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"path/filepath"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -16,8 +15,8 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/tools/clientcmd"
-	"k8s.io/client-go/util/homedir"
+
+	"github.com/prt2/nimbus/internal/kubeutil"
 )
 
 type ComputeRequestSpec struct {
@@ -53,18 +52,12 @@ var computeRequestGVR = schema.GroupVersionResource{
 }
 
 func NewController() (*Controller, error) {
-	kubeconfig := filepath.Join(homedir.HomeDir(), ".kube", "config")
-	config, err := clientcmd.BuildConfigFromFlags("", kubeconfig)
-	if err != nil {
-		return nil, fmt.Errorf("failed to load kubeconfig: %w", err)
-	}
-
-	k8sClient, err := kubernetes.NewForConfig(config)
+	k8sClient, err := kubeutil.NewKubernetesClient()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create k8s client: %w", err)
 	}
 
-	dynamicClient, err := dynamic.NewForConfig(config)
+	dynamicClient, err := kubeutil.NewDynamicClient()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create dynamic client: %w", err)
 	}
@@ -73,7 +66,7 @@ func NewController() (*Controller, error) {
 }
 
 func (c *Controller) Start(ctx context.Context) {
-	fmt.Println("🎮 ComputeRequest controller starting...")
+	fmt.Println("ComputeRequest controller starting...")
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
 
@@ -94,7 +87,7 @@ func (c *Controller) reconcileAll(ctx context.Context) {
 		Namespace("").
 		List(ctx, metav1.ListOptions{})
 	if err != nil {
-		fmt.Printf("❌ Failed to list ComputeRequests: %v\n", err)
+		fmt.Printf("Failed to list ComputeRequests: %v\n", err)
 		return
 	}
 
@@ -104,7 +97,7 @@ func (c *Controller) reconcileAll(ctx context.Context) {
 		data, _ := json.Marshal(item.Object)
 		var cr ComputeRequest
 		if err := json.Unmarshal(data, &cr); err != nil {
-			fmt.Printf("❌ Failed to decode ComputeRequest: %v\n", err)
+			fmt.Printf("Failed to decode ComputeRequest: %v\n", err)
 			continue
 		}
 		c.reconcile(ctx, &cr)
@@ -119,18 +112,18 @@ func (c *Controller) reconcile(ctx context.Context, cr *ComputeRequest) {
 		Get(ctx, deploymentName, metav1.GetOptions{})
 
 	if errors.IsNotFound(err) {
-		fmt.Printf("  ➕ Creating deployment %s in %s\n", deploymentName, namespace)
+		fmt.Printf("Creating deployment %s in %s\n", deploymentName, namespace)
 		if err := c.createDeployment(ctx, cr, namespace, deploymentName); err != nil {
-			fmt.Printf("  ❌ Failed to create deployment: %v\n", err)
+			fmt.Printf("Failed to create deployment: %v\n", err)
 			c.updateStatus(ctx, cr, "Failed", deploymentName, err.Error())
 			return
 		}
 		c.updateStatus(ctx, cr, "Running", deploymentName, "Deployment created successfully")
-		fmt.Printf("  ✅ Deployment %s created\n", deploymentName)
+		fmt.Printf("Deployment %s created\n", deploymentName)
 	} else if err != nil {
-		fmt.Printf("  ❌ Error checking deployment: %v\n", err)
+		fmt.Printf("Error checking deployment: %v\n", err)
 	} else {
-		fmt.Printf("  ✓  Deployment %s already exists\n", deploymentName)
+		fmt.Printf("Deployment %s already exists\n", deploymentName)
 	}
 }
 
@@ -160,6 +153,8 @@ func (c *Controller) createDeployment(ctx context.Context, cr *ComputeRequest, n
 					Labels: map[string]string{"app": name},
 				},
 				Spec: corev1.PodSpec{
+					// Route controller-managed workloads through the custom scheduler.
+					SchedulerName: "nimbus-scheduler",
 					Containers: []corev1.Container{
 						{
 							Name:  "workload",
@@ -200,6 +195,6 @@ func (c *Controller) updateStatus(ctx context.Context, cr *ComputeRequest, phase
 		Namespace(cr.Namespace).
 		Patch(ctx, cr.Name, types.MergePatchType, patchBytes, metav1.PatchOptions{}, "status")
 	if err != nil {
-		fmt.Printf("  ⚠️  Failed to update status: %v\n", err)
+		fmt.Printf("Failed to update status: %v\n", err)
 	}
 }

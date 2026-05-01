@@ -2,7 +2,9 @@ package middleware
 
 import (
 	"context"
+	"fmt"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -14,6 +16,18 @@ var jwtSecret = []byte("nimbus-super-secret-key-change-in-production")
 type contextKey string
 
 const TenantKey contextKey = "tenant"
+
+func init() {
+	if secret := os.Getenv("JWT_SECRET"); secret != "" {
+		jwtSecret = []byte(secret)
+	}
+}
+
+func SetJWTSecret(secret string) {
+	if secret != "" {
+		jwtSecret = []byte(secret)
+	}
+}
 
 func GenerateToken(tenantID, tenantName string) (string, error) {
 	claims := jwt.MapClaims{
@@ -62,4 +76,28 @@ func Auth(next http.Handler) http.Handler {
 		ctx := context.WithValue(r.Context(), TenantKey, claims)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+func ClaimsFromContext(ctx context.Context) (jwt.MapClaims, bool) {
+	claims, ok := ctx.Value(TenantKey).(jwt.MapClaims)
+	return claims, ok
+}
+
+func TenantIDFromContext(ctx context.Context) (string, error) {
+	claims, ok := ClaimsFromContext(ctx)
+	if !ok {
+		return "", fmt.Errorf("missing auth claims")
+	}
+
+	tenantID, ok := claims["tenant_id"].(string)
+	if !ok || tenantID == "" {
+		return "", fmt.Errorf("missing tenant id in token")
+	}
+
+	return tenantID, nil
+}
+
+func IsAdmin(ctx context.Context) bool {
+	tenantID, err := TenantIDFromContext(ctx)
+	return err == nil && tenantID == "admin"
 }

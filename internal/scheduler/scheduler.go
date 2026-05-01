@@ -3,23 +3,25 @@ package scheduler
 import (
 	"context"
 	"fmt"
-	"path/filepath"
 	"sort"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/tools/clientcmd"
-	"k8s.io/client-go/util/homedir"
+
+	"github.com/prt2/nimbus/internal/kubeutil"
+	"github.com/prt2/nimbus/internal/metrics"
 )
 
 const SchedulerName = "nimbus-scheduler"
 
 // Scheduler watches for unscheduled pods and places them on the best node.
-// "Best" means the node with the most available CPU — bin packing strategy.
+// "Best" means the node with the highest live CPU utilization.
 type Scheduler struct {
-	k8s kubernetes.Interface
+	k8s     kubernetes.Interface
+	dynamic dynamic.Interface
 }
 
 // NodeScore holds a node and its computed score.
@@ -30,25 +32,24 @@ type NodeScore struct {
 }
 
 func NewScheduler() (*Scheduler, error) {
-	kubeconfig := filepath.Join(homedir.HomeDir(), ".kube", "config")
-	config, err := clientcmd.BuildConfigFromFlags("", kubeconfig)
-	if err != nil {
-		return nil, fmt.Errorf("failed to load kubeconfig: %w", err)
-	}
-
-	client, err := kubernetes.NewForConfig(config)
+	client, err := kubeutil.NewKubernetesClient()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create k8s client: %w", err)
 	}
 
-	return &Scheduler{k8s: client}, nil
+	dynamicClient, err := kubeutil.NewDynamicClient()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create dynamic client: %w", err)
+	}
+
+	return &Scheduler{k8s: client, dynamic: dynamicClient}, nil
 }
 
 // Start begins the scheduling loop.
 // Every 5 seconds it looks for pods that need scheduling
 // and places them on the best available node.
 func (s *Scheduler) Start(ctx context.Context) {
-	fmt.Println("🧠 Nimbus custom scheduler starting...")
+	fmt.Println("Nimbus scheduler starting...")
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 
@@ -72,7 +73,7 @@ func (s *Scheduler) scheduleAll(ctx context.Context) {
 		FieldSelector: "spec.schedulerName=nimbus-scheduler,spec.nodeName=",
 	})
 	if err != nil {
-		fmt.Printf("❌ Scheduler failed to list pods: %v\n", err)
+		fmt.Printf("Scheduler failed to list pods: %v\n", err)
 		return
 	}
 
@@ -80,17 +81,17 @@ func (s *Scheduler) scheduleAll(ctx context.Context) {
 		return
 	}
 
-	fmt.Printf("🧠 Scheduling %d pending pod(s)...\n", len(pods.Items))
+	fmt.Printf("Scheduling %d pending pod(s)\n", len(pods.Items))
 
 	for _, pod := range pods.Items {
 		if err := s.schedulePod(ctx, &pod); err != nil {
-			fmt.Printf("  ❌ Failed to schedule pod %s: %v\n", pod.Name, err)
+			fmt.Printf("Failed to schedule pod %s: %v\n", pod.Name, err)
 		}
 	}
 }
 
 func (s *Scheduler) schedulePod(ctx context.Context, pod *corev1.Pod) error {
-	fmt.Printf("  🔍 Finding best node for pod %s...\n", pod.Name)
+	fmt.Printf("Finding best node for pod %s\n", pod.Name)
 
 	// Step 1: Get all schedulable nodes
 	nodes, err := s.k8s.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
@@ -115,7 +116,7 @@ func (s *Scheduler) schedulePod(ctx context.Context, pod *corev1.Pod) error {
 
 	// Step 4: Pick the highest scoring node
 	best := scores[0]
-	fmt.Printf("  🏆 Best node: %s (score: %d)\n", best.NodeName, best.Score)
+	fmt.Printf("Selected node %s with score %d\n", best.NodeName, best.Score)
 
 	// Step 5: Bind the pod to that node
 	return s.bindPod(ctx, pod, best.NodeName)
@@ -134,7 +135,7 @@ func (s *Scheduler) scoreNodes(ctx context.Context, nodes []corev1.Node, pod *co
 			NodeName: node.Name,
 			Score:    score,
 		})
-		fmt.Printf("    📊 Node %s scored %d\n", node.Name, score)
+		fmt.Printf("Node %s scored %d\n", node.Name, score)
 	}
 
 	// Sort descending — highest score first
@@ -146,28 +147,23 @@ func (s *Scheduler) scoreNodes(ctx context.Context, nodes []corev1.Node, pod *co
 }
 
 // scoreNode calculates a single node's score.
-// Algorithm: count how much CPU is requested by pods already on this node.
+// Algorithm: measure live node CPU usage from metrics.k8s.io.
 // Higher usage = higher score (bin packing = fill up nodes before using new ones).
 func (s *Scheduler) scoreNode(ctx context.Context, node corev1.Node, pod *corev1.Pod) int64 {
-	// Get all running pods on this node
-	pods, err := s.k8s.CoreV1().Pods("").List(ctx, metav1.ListOptions{
-		FieldSelector: fmt.Sprintf("spec.nodeName=%s,status.phase=Running", node.Name),
-	})
+	// Score from live node metrics so placement follows actual cluster load.
+	nodeMetrics, err := kubeutil.ListNodeMetrics(ctx, s.dynamic)
 	if err != nil {
 		return 0
 	}
 
-	// Sum up all CPU requests from existing pods
-	var totalCPURequested int64
-	for _, p := range pods.Items {
-		for _, container := range p.Spec.Containers {
-			if cpu, ok := container.Resources.Requests[corev1.ResourceCPU]; ok {
-				totalCPURequested += cpu.MilliValue()
-			}
+	var usedCPUMilli int64
+	for _, metric := range nodeMetrics {
+		if metric.Name == node.Name {
+			usedCPUMilli = metric.CPUMilli
+			break
 		}
 	}
 
-	// Get node's total allocatable CPU
 	allocatable := node.Status.Allocatable[corev1.ResourceCPU]
 	totalCPU := allocatable.MilliValue()
 
@@ -175,10 +171,7 @@ func (s *Scheduler) scoreNode(ctx context.Context, node corev1.Node, pod *corev1
 		return 0
 	}
 
-	// Score = percentage of CPU already used (0-100)
-	// Higher usage = higher score = we prefer already-busy nodes
-	score := (totalCPURequested * 100) / totalCPU
-	return score
+	return cpuUtilizationScore(usedCPUMilli, totalCPU)
 }
 
 // bindPod tells Kubernetes to assign this pod to this node.
@@ -200,9 +193,18 @@ func (s *Scheduler) bindPod(ctx context.Context, pod *corev1.Pod, nodeName strin
 	err := s.k8s.CoreV1().Pods(pod.Namespace).
 		Bind(ctx, binding, metav1.CreateOptions{})
 	if err != nil {
+		metrics.SchedulerDecisions.WithLabelValues(nodeName, "error").Inc()
 		return fmt.Errorf("failed to bind pod to node %s: %w", nodeName, err)
 	}
 
-	fmt.Printf("  ✅ Pod %s bound to node %s\n", pod.Name, nodeName)
+	metrics.SchedulerDecisions.WithLabelValues(nodeName, "bound").Inc()
+	fmt.Printf("Pod %s bound to node %s\n", pod.Name, nodeName)
 	return nil
+}
+
+func cpuUtilizationScore(usedCPUMilli, totalCPUMilli int64) int64 {
+	if totalCPUMilli == 0 {
+		return 0
+	}
+	return (usedCPUMilli * 100) / totalCPUMilli
 }

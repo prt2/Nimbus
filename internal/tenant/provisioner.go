@@ -4,15 +4,13 @@ import (
 	"context"
 	"fmt"
 
-	"path/filepath"
-
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/tools/clientcmd"
-	"k8s.io/client-go/util/homedir"
+
+	"github.com/prt2/nimbus/internal/kubeutil"
 )
 
 // Provisioner talks to the Kubernetes API to create real infrastructure
@@ -22,14 +20,7 @@ type Provisioner struct {
 }
 
 func NewProvisioner() (*Provisioner, error) {
-	// Load your local kubeconfig (the same file kubectl uses)
-	kubeconfig := filepath.Join(homedir.HomeDir(), ".kube", "config")
-	config, err := clientcmd.BuildConfigFromFlags("", kubeconfig)
-	if err != nil {
-		return nil, fmt.Errorf("failed to load kubeconfig: %w", err)
-	}
-
-	client, err := kubernetes.NewForConfig(config)
+	client, err := kubeutil.NewKubernetesClient()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create k8s client: %w", err)
 	}
@@ -46,7 +37,7 @@ func (p *Provisioner) Provision(ctx context.Context, t *Tenant) error {
 	if err := p.createResourceQuota(ctx, t); err != nil {
 		return fmt.Errorf("failed to create resource quota: %w", err)
 	}
-	fmt.Printf("✅ Provisioned tenant %s → namespace %s\n", t.Name, t.Namespace)
+	fmt.Printf("Provisioned tenant %s in namespace %s\n", t.Name, t.Namespace)
 	return nil
 }
 
@@ -97,6 +88,6 @@ func (p *Provisioner) Deprovision(ctx context.Context, t *Tenant) error {
 	if err != nil {
 		return fmt.Errorf("failed to delete namespace: %w", err)
 	}
-	fmt.Printf("🗑️  Deprovisioned tenant %s → deleted namespace %s\n", t.Name, t.Namespace)
+	fmt.Printf("Deleted tenant %s namespace %s\n", t.Name, t.Namespace)
 	return nil
 }

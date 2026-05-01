@@ -1,119 +1,127 @@
 # Nimbus
 
-A Kubernetes-based multi-tenant cloud control plane built in Go. Nimbus lets you provision isolated compute environments through a REST API, enforce resource quotas per tenant, schedule pods using a custom bin-packing scheduler, autoscale deployments based on utilization, and track usage-based billing — similar in architecture to AWS ECS or Google Cloud Run.
+Nimbus is a small multi-tenant Kubernetes control plane written in Go.
 
----
+It does four main things:
 
-## What Was Built
+- Creates one Kubernetes namespace per tenant and applies resource quotas.
+- Watches a `ComputeRequest` CRD and creates workloads for it.
+- Schedules those workloads with a custom bin-packing scheduler.
+- Tracks tenant CPU and memory usage for autoscaling and billing.
 
-**Multi-Tenant Provisioning**
-Each tenant gets a dedicated Kubernetes namespace with CPU, memory, and pod limits enforced via ResourceQuota. Tenants are created through the REST API and provisioned into the cluster automatically.
+The repo also includes a React dashboard, Helm chart, Docker setup, and basic Prometheus/Grafana manifests.
 
-**Custom Scheduler**
-Replaces the default Kubernetes scheduler with a bin-packing algorithm. Nodes are scored by existing CPU utilization — pods are placed on the busiest node first to maximize density before using idle capacity.
+## Stack
 
-**Controller Reconcile Loop**
-Watches `ComputeRequest` custom resources and automatically provisions the corresponding Deployment. Idempotent — runs every 10 seconds and only acts when state diverges from desired.
+- Go
+- Kubernetes
+- PostgreSQL
+- React
+- Docker
+- Helm
+- Prometheus and Grafana
 
-**Autoscaling Engine**
-Monitors deployments every 30 seconds. Scales up when utilization exceeds 70%, scales down below 30%. Respects min/max replica bounds (1-5).
+## Project Layout
 
-**Billing Engine**
-Scrapes CPU and memory requests per tenant namespace every 30 seconds. Accumulates millicore-seconds and MB-seconds, then generates invoices with real cost calculations stored in PostgreSQL.
-
-**JWT Authentication**
-Every API endpoint is protected with JWT tokens signed with HS256. Tokens carry tenant identity and expire after 24 hours.
-
-**React Dashboard**
-A frontend dashboard showing live tenant status, workload pod counts, billing invoices, and scheduler decisions.
-
-**Observability**
-Prometheus metrics exposed at `/metrics` covering API request rates, latency histograms, per-tenant pod counts, CPU usage, billing totals, and autoscaler actions. Grafana dashboard included.
-
----
-
-## Tech Stack
-
-| Component | Technology |
-|---|---|
-| API server | Go |
-| Kubernetes client | client-go |
-| Database | PostgreSQL 15 |
-| Authentication | JWT (golang-jwt) |
-| Frontend | React, Recharts |
-| Packaging | Helm |
-| Metrics | Prometheus, Grafana |
-| Local cluster | kind (Kubernetes in Docker) |
-
----
-
-## Project Structure
-
-```
-nimbus/
-├── cmd/
-│   └── api/
-│       └── main.go                        # Entry point
-├── internal/
-│   ├── tenant/
-│   │   ├── tenant.go                      # Tenant model
-│   │   ├── store_db.go                    # PostgreSQL store
-│   │   └── provisioner.go                 # Namespace + quota provisioning
-│   ├── controller/
-│   │   └── computerequest_controller.go   # CRD reconcile loop
-│   ├── scheduler/
-│   │   └── scheduler.go                   # Custom bin-packing scheduler
-│   ├── autoscaler/
-│   │   └── autoscaler.go                  # Scale up/down loop
-│   ├── billing/
-│   │   └── billing.go                     # Usage tracking and invoicing
-│   ├── metrics/
-│   │   └── metrics.go                     # Prometheus metric definitions
-│   └── middleware/
-│       ├── auth.go                        # JWT middleware
-│       └── cors.go                        # CORS middleware
-├── k8s/
-│   ├── crds/
-│   │   └── computerequest.yaml            # ComputeRequest CRD
-│   ├── monitoring/
-│   │   ├── servicemonitor.yaml            # Prometheus scrape config
-│   │   └── grafana-dashboard.yaml         # Grafana dashboard ConfigMap
-│   └── helm/
-│       └── nimbus/                        # Helm chart
-└── frontend/                              # React dashboard
+```text
+cmd/api/main.go                  API entrypoint
+internal/tenant/                 tenant storage and namespace provisioning
+internal/controller/             ComputeRequest controller
+internal/scheduler/              custom scheduler
+internal/autoscaler/             autoscaling loop
+internal/billing/                usage collection and invoicing
+internal/middleware/             JWT auth and CORS
+internal/kubeutil/               shared Kubernetes and metrics helpers
+frontend/                        React dashboard
+k8s/crds/                        ComputeRequest CRD
+k8s/helm/nimbus/                 Helm chart
+k8s/monitoring/                  Prometheus and Grafana manifests
 ```
 
----
+## How It Works
 
-## Running Locally
+### Tenants
 
-### Prerequisites
+Tenants are stored in PostgreSQL.  
+When a tenant is created through the API, Nimbus:
+
+- writes the tenant record to Postgres
+- creates a Kubernetes namespace
+- applies a `ResourceQuota` for CPU, memory, and pod count
+
+### Workloads
+
+Workloads are defined through a `ComputeRequest` custom resource.
+
+The controller checks for new requests every 10 seconds. If the matching Deployment does not exist yet, it creates one in the tenant namespace.
+
+### Scheduler
+
+Workloads created by the controller use `nimbus-scheduler`.
+
+The scheduler checks for pending pods every 5 seconds. It scores nodes by live CPU utilization from `metrics.k8s.io` and picks the busiest schedulable node first. That gives the scheduler a bin-packing bias instead of spreading pods evenly.
+
+### Autoscaling
+
+The autoscaler checks Nimbus-managed Deployments every 30 seconds.
+
+It compares live CPU and memory usage against the resources requested by the running pods:
+
+- scale up at 70% or higher
+- scale down at 30% or lower
+- keep replicas between 1 and 5
+
+### Billing
+
+The billing engine collects live pod CPU and memory usage every 30 seconds.
+
+It stores accumulated tenant usage in memory and also persists usage totals to PostgreSQL. Invoices are generated through the API from the accumulated usage records.
+
+### Authentication
+
+The API uses JWT tokens signed with HS256.
+
+- `/auth/token` issues a token
+- most API routes require `Authorization: Bearer <token>`
+- admin tokens can view all tenants
+- non-admin tokens are scoped to their own tenant
+
+## Prerequisites
 
 - Go 1.21+
-- Docker Desktop (running)
-- kind
-- kubectl
-- Helm
 - Node.js 18+
-- PostgreSQL (local install or Docker)
+- Docker
+- kubectl
+- kind or another Kubernetes cluster
+- PostgreSQL
+- metrics-server installed in the cluster
 
-### 1. Create a local Kubernetes cluster
+## Run Locally
+
+### 1. Start a cluster
 
 ```bash
 kind create cluster --name nimbus
 kubectl apply -f k8s/crds/computerequest.yaml
+kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
 ```
+
+The metrics server is required for:
+
+- scheduler node scoring
+- autoscaling
+- billing
 
 ### 2. Start PostgreSQL
 
-If you have PostgreSQL installed locally:
+If PostgreSQL is already installed locally:
 
 ```bash
 psql postgresql://localhost:5432/postgres -c "CREATE USER nimbus WITH PASSWORD 'nimbus123';"
 psql postgresql://localhost:5432/postgres -c "CREATE DATABASE nimbus OWNER nimbus;"
 ```
 
-Or via Docker (use port 5433 to avoid conflicts):
+Or run it in Docker:
 
 ```bash
 docker run -d \
@@ -121,29 +129,29 @@ docker run -d \
   -e POSTGRES_USER=nimbus \
   -e POSTGRES_PASSWORD=nimbus123 \
   -e POSTGRES_DB=nimbus \
-  -p 5433:5432 \
+  -p 5432:5432 \
   postgres:15
 ```
 
-### 3. Run the API server
+### 3. Start the API
 
 ```bash
 go mod tidy
 go run cmd/api/main.go
 ```
 
-Expected output:
+The API reads these environment variables if set:
 
-```
-Connected to PostgreSQL
-ComputeRequest controller starting...
-Nimbus custom scheduler starting...
-Billing engine starting...
-Autoscaler starting...
-Nimbus API server starting on port 8080...
-```
+- `DB_HOST`
+- `DB_PORT`
+- `DB_NAME`
+- `DB_USER`
+- `DB_PASSWORD`
+- `DB_SSLMODE`
+- `JWT_SECRET`
+- `KUBECONFIG`
 
-### 4. Run the frontend
+### 4. Start the frontend
 
 ```bash
 cd frontend
@@ -151,9 +159,91 @@ npm install
 npm start
 ```
 
-Dashboard available at `http://localhost:3000`
+Frontend URL:
 
-### 5. Install monitoring (optional)
+```text
+http://localhost:3000
+```
+
+## Run With Docker Compose
+
+```bash
+docker compose up --build
+```
+
+This starts:
+
+- PostgreSQL
+- the Go API
+- the React frontend
+
+The compose setup mounts your local kubeconfig into the API container so it can still talk to the cluster.
+
+## API
+
+### Get a token
+
+```http
+POST /auth/token
+Content-Type: application/json
+```
+
+Example body:
+
+```json
+{
+  "tenant_id": "admin",
+  "tenant_name": "admin"
+}
+```
+
+### Tenant routes
+
+```text
+GET    /tenants
+POST   /tenants
+GET    /tenants/:id
+DELETE /tenants/:id
+```
+
+### Billing routes
+
+```text
+GET /billing/usage
+GET /billing/invoice/:tenant
+```
+
+### Metrics
+
+```text
+GET /metrics
+```
+
+## Example ComputeRequest
+
+```yaml
+apiVersion: nimbus.io/v1
+kind: ComputeRequest
+metadata:
+  name: my-service
+  namespace: nimbus-acme
+spec:
+  tenantId: acme
+  image: nginx
+  cpu: "200m"
+  memory: "256Mi"
+  replicas: 1
+```
+
+Apply it with:
+
+```bash
+kubectl apply -f my-request.yaml
+```
+
+## Monitoring
+
+If you want Prometheus and Grafana locally:
 
 ```bash
 helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
@@ -165,74 +255,9 @@ helm install monitoring prometheus-community/kube-prometheus-stack \
 
 kubectl apply -f k8s/monitoring/servicemonitor.yaml
 kubectl apply -f k8s/monitoring/grafana-dashboard.yaml
-
-kubectl port-forward -n monitoring svc/monitoring-grafana 3002:80
 ```
 
-Grafana available at `http://localhost:3002` — login with `admin / nimbus123`
-
----
-
-## API Reference
-
-### Authentication
-
-```bash
-POST /auth/token
-Content-Type: application/json
-
-{ "tenant_id": "admin", "tenant_name": "admin" }
-```
-
-Returns a JWT token. Pass it as `Authorization: Bearer <token>` on all other requests.
-
-### Tenants
-
-```bash
-GET    /tenants           # List all tenants
-POST   /tenants           # Create tenant
-GET    /tenants/:id       # Get tenant by ID
-DELETE /tenants/:id       # Delete tenant and deprovision namespace
-```
-
-### Billing
-
-```bash
-GET /billing/usage              # Current usage across all tenants
-GET /billing/invoice/:tenant    # Generate invoice for a tenant
-```
-
-### Metrics
-
-```bash
-GET /metrics    # Prometheus metrics (no auth required)
-```
-
-### Deploying a Workload
-
-Workloads are submitted as `ComputeRequest` custom resources via kubectl:
-
-```bash
-kubectl apply -f - <<EOF
-apiVersion: nimbus.io/v1
-kind: ComputeRequest
-metadata:
-  name: my-service
-  namespace: nimbus-<tenant-name>
-spec:
-  tenantId: <tenant-name>
-  image: nginx
-  cpu: "200m"
-  memory: "256Mi"
-  replicas: 1
-EOF
-```
-
-The controller picks this up within 10 seconds and creates the corresponding Deployment.
-
----
-
-## Deploy with Helm
+## Helm
 
 ```bash
 helm install nimbus k8s/helm/nimbus

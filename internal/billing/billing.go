@@ -6,12 +6,12 @@ import (
 	"sync"
 	"time"
 
-	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/tools/clientcmd"
-	"k8s.io/client-go/util/homedir"
-	"path/filepath"
+
+	"github.com/prt2/nimbus/internal/kubeutil"
+	"github.com/prt2/nimbus/internal/metrics"
 )
 
 // UsageRecord tracks how much a tenant has consumed in a billing period.
@@ -19,9 +19,10 @@ import (
 // These get converted to cost at invoice time.
 type UsageRecord struct {
 	TenantID        string
-	CPUMilliSeconds int64   // total CPU milliseconds consumed
-	MemoryMBSeconds int64   // total memory MB-seconds consumed
-	PodCount        int     // number of pods running
+	TenantName      string
+	CPUMilliSeconds int64 // total CPU milliseconds consumed
+	MemoryMBSeconds int64 // total memory MB-seconds consumed
+	PodCount        int   // number of pods running
 	LastUpdated     time.Time
 }
 
@@ -37,35 +38,42 @@ type Invoice struct {
 
 // Pricing constants — fake money but real math
 const (
-	CPUCostPerMillicoreHour  = 0.00001  // $ per millicore per hour
-	MemoryCostPerMBHour      = 0.000001 // $ per MB per hour
+	CPUCostPerMillicoreHour = 0.00001  // $ per millicore per hour
+	MemoryCostPerMBHour     = 0.000001 // $ per MB per hour
 )
 
 // Engine scrapes pod resource usage per tenant namespace
 // and accumulates billing data over time.
 type Engine struct {
-	k8s     kubernetes.Interface
-	mu      sync.RWMutex
-	usage   map[string]*UsageRecord // keyed by tenantID
-	startTime time.Time
+	k8s        kubernetes.Interface
+	dynamic    dynamic.Interface
+	usageStore UsageStore
+	mu         sync.RWMutex
+	usage      map[string]*UsageRecord // keyed by tenantID
+	startTime  time.Time
 }
 
-func NewEngine() (*Engine, error) {
-	kubeconfig := filepath.Join(homedir.HomeDir(), ".kube", "config")
-	config, err := clientcmd.BuildConfigFromFlags("", kubeconfig)
-	if err != nil {
-		return nil, fmt.Errorf("failed to load kubeconfig: %w", err)
-	}
+type UsageStore interface {
+	SaveUsage(tenantID string, cpuMS, memMBS int64, podCount int) error
+}
 
-	client, err := kubernetes.NewForConfig(config)
+func NewEngine(store UsageStore) (*Engine, error) {
+	client, err := kubeutil.NewKubernetesClient()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create k8s client: %w", err)
 	}
 
+	dynamicClient, err := kubeutil.NewDynamicClient()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create dynamic client: %w", err)
+	}
+
 	return &Engine{
-		k8s:       client,
-		usage:     make(map[string]*UsageRecord),
-		startTime: time.Now(),
+		k8s:        client,
+		dynamic:    dynamicClient,
+		usageStore: store,
+		usage:      make(map[string]*UsageRecord),
+		startTime:  time.Now(),
 	}, nil
 }
 
@@ -73,7 +81,7 @@ func NewEngine() (*Engine, error) {
 // Every 30 seconds it scans all nimbus namespaces,
 // counts running pods, and accumulates usage.
 func (e *Engine) Start(ctx context.Context) {
-	fmt.Println("💰 Billing engine starting...")
+	fmt.Println("Billing engine starting...")
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 
@@ -98,20 +106,21 @@ func (e *Engine) collect(ctx context.Context) {
 		LabelSelector: "managed-by=nimbus",
 	})
 	if err != nil {
-		fmt.Printf("❌ Billing: failed to list namespaces: %v\n", err)
+		fmt.Printf("Billing: failed to list namespaces: %v\n", err)
 		return
 	}
 
 	for _, ns := range namespaces.Items {
-		tenantID := ns.Labels["tenant-name"]
+		tenantID := ns.Labels["tenant-id"]
 		if tenantID == "" {
 			continue
 		}
-		e.collectTenant(ctx, tenantID, ns.Name)
+		tenantName := ns.Labels["tenant-name"]
+		e.collectTenant(ctx, tenantID, tenantName, ns.Name)
 	}
 }
 
-func (e *Engine) collectTenant(ctx context.Context, tenantID, namespace string) {
+func (e *Engine) collectTenant(ctx context.Context, tenantID, tenantName, namespace string) {
 	pods, err := e.k8s.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
 		FieldSelector: "status.phase=Running",
 	})
@@ -119,15 +128,32 @@ func (e *Engine) collectTenant(ctx context.Context, tenantID, namespace string) 
 		return
 	}
 
-	var cpuMillis int64
-	var memoryMB int64
-
-	for _, pod := range pods.Items {
-		cpuMillis += podCPUMillis(pod)
-		memoryMB += podMemoryMB(pod)
+	podMetrics, err := kubeutil.ListPodMetrics(ctx, e.dynamic, namespace)
+	if err != nil {
+		fmt.Printf("Billing: failed to read pod metrics in %s: %v\n", namespace, err)
+		return
 	}
 
-	// 30 seconds of usage — multiply resource by time interval
+	metricByPod := make(map[string]kubeutil.PodMetric, len(podMetrics))
+	for _, metric := range podMetrics {
+		metricByPod[metric.Name] = metric
+	}
+
+	var cpuMillis int64
+	var memoryBytes int64
+
+	for _, pod := range pods.Items {
+		metric, ok := metricByPod[pod.Name]
+		if !ok {
+			continue
+		}
+		cpuMillis += metric.CPUMilli
+		memoryBytes += metric.MemoryBytes
+	}
+
+	memoryMB := memoryBytes / (1024 * 1024)
+
+	// Convert an instant metrics snapshot into the 30-second billing interval.
 	const intervalSeconds = 30
 
 	e.mu.Lock()
@@ -138,12 +164,24 @@ func (e *Engine) collectTenant(ctx context.Context, tenantID, namespace string) 
 	}
 
 	record := e.usage[tenantID]
+	record.TenantName = tenantName
 	record.CPUMilliSeconds += cpuMillis * intervalSeconds
 	record.MemoryMBSeconds += memoryMB * intervalSeconds
 	record.PodCount = len(pods.Items)
 	record.LastUpdated = time.Now()
 
-	fmt.Printf("💰 [%s] pods=%d cpu=%dm memory=%dMB accumulated\n",
+	if e.usageStore != nil {
+		if err := e.usageStore.SaveUsage(tenantID, cpuMillis*intervalSeconds, memoryMB*intervalSeconds, len(pods.Items)); err != nil {
+			fmt.Printf("Billing: failed to persist usage for %s: %v\n", tenantID, err)
+		}
+	}
+
+	metrics.TenantPodsRunning.WithLabelValues(tenantID).Set(float64(len(pods.Items)))
+	metrics.TenantCPUUsage.WithLabelValues(tenantID).Set(float64(cpuMillis))
+	metrics.TenantMemoryUsage.WithLabelValues(tenantID).Set(float64(memoryMB))
+	metrics.BillingCPUSeconds.WithLabelValues(tenantID).Add(float64(cpuMillis*intervalSeconds) / 1000)
+
+	fmt.Printf("Billing sample for %s: pods=%d cpu=%dm memory=%dMB\n",
 		tenantID, len(pods.Items), cpuMillis, memoryMB)
 }
 
@@ -192,28 +230,6 @@ func (e *Engine) GenerateInvoice(tenantID string) *Invoice {
 		TotalCost:   cpuCost + memoryCost,
 		GeneratedAt: time.Now(),
 	}
-}
-
-// podCPUMillis sums all container CPU requests for a pod in millicores.
-func podCPUMillis(pod corev1.Pod) int64 {
-	var total int64
-	for _, c := range pod.Spec.Containers {
-		if cpu, ok := c.Resources.Requests[corev1.ResourceCPU]; ok {
-			total += cpu.MilliValue()
-		}
-	}
-	return total
-}
-
-// podMemoryMB sums all container memory requests for a pod in MB.
-func podMemoryMB(pod corev1.Pod) int64 {
-	var total int64
-	for _, c := range pod.Spec.Containers {
-		if mem, ok := c.Resources.Requests[corev1.ResourceMemory]; ok {
-			total += mem.Value() / (1024 * 1024)
-		}
-	}
-	return total
 }
 
 func currentPeriod() string {

@@ -193,11 +193,11 @@ const css = `
 
 // ── Sidebar ────────────────────────────────────────────────────
 const PAGES = [
-  { id: "overview", icon: "⬡", label: "Overview" },
-  { id: "tenants", icon: "◈", label: "Tenants" },
-  { id: "workloads", icon: "⬡", label: "Workloads" },
-  { id: "billing", icon: "◇", label: "Billing" },
-  { id: "scheduler", icon: "◉", label: "Scheduler" },
+  { id: "overview", label: "Overview" },
+  { id: "tenants", label: "Tenants" },
+  { id: "workloads", label: "Workloads" },
+  { id: "billing", label: "Billing" },
+  { id: "scheduler", label: "Scheduler" },
 ];
 
 function Sidebar({ page, setPage }) {
@@ -213,7 +213,6 @@ function Sidebar({ page, setPage }) {
           className={`nav-item ${page === p.id ? "active" : ""}`}
           onClick={() => setPage(p.id)}
         >
-          <span>{p.icon}</span>
           {p.label}
         </div>
       ))}
@@ -232,8 +231,8 @@ function Overview({ tenants, usage }) {
 
   const chartData = tenants.map((t) => ({
     name: t.name,
-    pods: usage[t.name]?.PodCount || 0,
-    cpu: usage[t.name]?.CPUMilliSeconds || 0,
+    pods: usage[t.id]?.PodCount || 0,
+    cpu: usage[t.id]?.CPUMilliSeconds || 0,
   }));
 
   return (
@@ -383,7 +382,7 @@ function Workloads({ tenants, usage }) {
         <div className="card"><div className="empty">No tenants — create one first</div></div>
       ) : (
         tenants.map(t => {
-          const u = usage[t.name];
+          const u = usage[t.id];
           return (
             <div className="card" key={t.id} style={{ marginBottom: 12 }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
@@ -423,16 +422,16 @@ function Billing({ tenants, usage }) {
 
   useEffect(() => {
     tenants.forEach(async t => {
-      const inv = await fetchInvoice(t.name);
-      setInvoices(prev => ({ ...prev, [t.name]: inv }));
+      const inv = await fetchInvoice(t.id);
+      setInvoices(prev => ({ ...prev, [t.id]: inv }));
     });
   }, [tenants]);
 
   const usageHistory = tenants.map(t => ({
     name: t.name,
-    cpu: (usage[t.name]?.CPUMilliSeconds || 0) / 1000,
-    memory: (usage[t.name]?.MemoryMBSeconds || 0) / 1000,
-    cost: invoices[t.name]?.TotalCost || 0,
+    cpu: (usage[t.id]?.CPUMilliSeconds || 0) / 1000,
+    memory: (usage[t.id]?.MemoryMBSeconds || 0) / 1000,
+    cost: invoices[t.id]?.TotalCost || 0,
   }));
 
   return (
@@ -475,7 +474,7 @@ function Billing({ tenants, usage }) {
             </thead>
             <tbody>
               {tenants.map(t => {
-                const inv = invoices[t.name];
+                const inv = invoices[t.id];
                 return (
                   <tr key={t.id}>
                     <td style={{ color: theme.text, fontWeight: 600 }}>{t.name}</td>
@@ -546,11 +545,11 @@ function Scheduler({ usage }) {
             <tr><th>Pod</th><th>Namespace</th><th>Node</th><th>Strategy</th><th>Score</th></tr>
           </thead>
           <tbody>
-            {Object.entries(usage).map(([tenant, u]) =>
+            {Object.entries(usage).map(([tenantID, u]) =>
               u.PodCount > 0 ? (
-                <tr key={tenant}>
+                <tr key={tenantID}>
                   <td>nimbus-workload-*</td>
-                  <td style={{ color: theme.muted }}>nimbus-{tenant}</td>
+                  <td style={{ color: theme.muted }}>{u.TenantName ? `nimbus-${u.TenantName}` : tenantID}</td>
                   <td style={{ color: theme.green }}>nimbus-control-plane</td>
                   <td><span className="badge badge-blue">bin-pack</span></td>
                   <td style={{ color: theme.accent }}>{score}</td>
@@ -596,7 +595,7 @@ export default function App() {
         <div className="main">
           <div className="header-row">
             <div />
-            <button className="refresh-btn" onClick={refresh}>↻ refresh</button>
+            <button className="refresh-btn" onClick={refresh}>Refresh</button>
           </div>
           {page === "overview" && <Overview tenants={tenants} usage={usage} />}
           {page === "tenants" && <Tenants tenants={tenants} refresh={refresh} />}

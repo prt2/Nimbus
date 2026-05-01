@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -20,8 +22,6 @@ import (
 	"github.com/prt2/nimbus/internal/tenant"
 )
 
-const dbConnStr = "postgresql://nimbus:nimbus123@127.0.0.1:5432/nimbus?sslmode=disable"
-
 type server struct {
 	tenants     *tenant.DBStore
 	provisioner *tenant.Provisioner
@@ -29,7 +29,9 @@ type server struct {
 }
 
 func main() {
-	dbStore, err := tenant.NewDBStore(dbConnStr)
+	middleware.SetJWTSecret(os.Getenv("JWT_SECRET"))
+
+	dbStore, err := tenant.NewDBStore(dbConnStr())
 	if err != nil {
 		log.Fatalf("Failed to connect to database: %v", err)
 	}
@@ -49,7 +51,7 @@ func main() {
 		log.Fatalf("Failed to create scheduler: %v", err)
 	}
 
-	billingEngine, err := billing.NewEngine()
+	billingEngine, err := billing.NewEngine(dbStore)
 	if err != nil {
 		log.Fatalf("Failed to create billing engine: %v", err)
 	}
@@ -89,7 +91,7 @@ func main() {
 		WriteTimeout: 10 * time.Second,
 	}
 
-	fmt.Println("🚀 Nimbus API server starting on port 8080...")
+	fmt.Println("Nimbus API server starting on port 8080...")
 	if err := httpServer.ListenAndServe(); err != nil {
 		log.Fatalf("Server failed to start: %v", err)
 	}
@@ -124,11 +126,24 @@ func (s *server) handleTenants(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		tenants := s.tenants.List()
+		// Non-admin callers only see their own tenant record.
+		if !middleware.IsAdmin(r.Context()) {
+			tenantID, err := middleware.TenantIDFromContext(r.Context())
+			if err != nil {
+				writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
+				return
+			}
+			tenants = filterTenantsByID(tenants, tenantID)
+		}
 		writeJSON(w, http.StatusOK, map[string]interface{}{
 			"tenants": tenants,
 			"count":   len(tenants),
 		})
 	case http.MethodPost:
+		if !middleware.IsAdmin(r.Context()) {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "only admin can create tenants"})
+			return
+		}
 		var req struct {
 			Name        string `json:"name"`
 			CPUQuota    string `json:"cpu_quota"`
@@ -154,6 +169,7 @@ func (s *server) handleTenants(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := s.provisioner.Provision(context.Background(), t); err != nil {
+			_ = s.tenants.Delete(t.ID)
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
 		}
@@ -176,8 +192,16 @@ func (s *server) handleTenantByID(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
 			return
 		}
+		if !canAccessTenant(r.Context(), t) {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+			return
+		}
 		writeJSON(w, http.StatusOK, t)
 	case http.MethodDelete:
+		if !middleware.IsAdmin(r.Context()) {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "only admin can delete tenants"})
+			return
+		}
 		t, err := s.tenants.Get(id)
 		if err != nil {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
@@ -199,7 +223,22 @@ func (s *server) handleUsage(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
-	writeJSON(w, http.StatusOK, s.billing.GetAllUsage())
+	// Admin can inspect the full platform view; tenant tokens are scoped.
+	if middleware.IsAdmin(r.Context()) {
+		writeJSON(w, http.StatusOK, s.billing.GetAllUsage())
+		return
+	}
+	tenantID, err := middleware.TenantIDFromContext(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
+		return
+	}
+	record := s.billing.GetUsage(tenantID)
+	if record == nil {
+		writeJSON(w, http.StatusOK, map[string]*billing.UsageRecord{})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]*billing.UsageRecord{tenantID: record})
 }
 
 func (s *server) handleInvoice(w http.ResponseWriter, r *http.Request) {
@@ -211,6 +250,22 @@ func (s *server) handleInvoice(w http.ResponseWriter, r *http.Request) {
 	if tenantID == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing tenant id"})
 		return
+	}
+	if t, err := s.tenants.Get(tenantID); err == nil {
+		tenantID = t.ID
+	} else if t, err := s.tenants.GetByName(tenantID); err == nil {
+		tenantID = t.ID
+	}
+	if !middleware.IsAdmin(r.Context()) {
+		tokenTenantID, err := middleware.TenantIDFromContext(r.Context())
+		if err != nil {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
+			return
+		}
+		if tokenTenantID != tenantID {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+			return
+		}
 	}
 	writeJSON(w, http.StatusOK, s.billing.GenerateInvoice(tenantID))
 }
@@ -241,4 +296,50 @@ type responseWriter struct {
 func (rw *responseWriter) WriteHeader(status int) {
 	rw.status = status
 	rw.ResponseWriter.WriteHeader(status)
+}
+
+func dbConnStr() string {
+	host := getenvDefault("DB_HOST", "127.0.0.1")
+	port := getenvDefault("DB_PORT", "5432")
+	name := getenvDefault("DB_NAME", "nimbus")
+	user := getenvDefault("DB_USER", "nimbus")
+	password := getenvDefault("DB_PASSWORD", "nimbus123")
+	sslmode := getenvDefault("DB_SSLMODE", "disable")
+
+	// Keep the connection string env-driven so local runs, Docker, and Helm
+	// all use the same code path.
+	return (&url.URL{
+		Scheme: "postgresql",
+		User:   url.UserPassword(user, password),
+		Host:   host + ":" + port,
+		Path:   name,
+		RawQuery: url.Values{
+			"sslmode": []string{sslmode},
+		}.Encode(),
+	}).String()
+}
+
+func getenvDefault(key, fallback string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
+	}
+	return fallback
+}
+
+func filterTenantsByID(tenants []*tenant.Tenant, tenantID string) []*tenant.Tenant {
+	filtered := make([]*tenant.Tenant, 0, 1)
+	for _, t := range tenants {
+		if t.ID == tenantID {
+			filtered = append(filtered, t)
+		}
+	}
+	return filtered
+}
+
+func canAccessTenant(ctx context.Context, t *tenant.Tenant) bool {
+	if middleware.IsAdmin(ctx) {
+		return true
+	}
+	tenantID, err := middleware.TenantIDFromContext(ctx)
+	return err == nil && tenantID == t.ID
 }

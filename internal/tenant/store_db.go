@@ -25,7 +25,7 @@ func NewDBStore(connStr string) (*DBStore, error) {
 	if err := store.migrate(); err != nil {
 		return nil, fmt.Errorf("failed to migrate: %w", err)
 	}
-	fmt.Println("✅ Connected to PostgreSQL")
+	fmt.Println("Connected to PostgreSQL")
 	return store, nil
 }
 
@@ -75,6 +75,18 @@ func (s *DBStore) Get(id string) (*Tenant, error) {
 	err := s.db.QueryRow(`
 		SELECT id, name, namespace, cpu_quota, memory_quota, created_at
 		FROM tenants WHERE id = $1`, id).
+		Scan(&t.ID, &t.Name, &t.Namespace, &t.CPUQuota, &t.MemoryQuota, &t.CreatedAt)
+	if err == sql.ErrNoRows {
+		return nil, fmt.Errorf("tenant not found")
+	}
+	return t, err
+}
+
+func (s *DBStore) GetByName(name string) (*Tenant, error) {
+	t := &Tenant{}
+	err := s.db.QueryRow(`
+		SELECT id, name, namespace, cpu_quota, memory_quota, created_at
+		FROM tenants WHERE name = $1`, name).
 		Scan(&t.ID, &t.Name, &t.Namespace, &t.CPUQuota, &t.MemoryQuota, &t.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("tenant not found")

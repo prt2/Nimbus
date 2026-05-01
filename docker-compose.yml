@@ -1,0 +1,42 @@
+services:
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: nimbus
+      POSTGRES_PASSWORD: nimbus123
+      POSTGRES_DB: nimbus
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: nimbus
+      DB_USER: nimbus
+      DB_PASSWORD: nimbus123
+      DB_SSLMODE: disable
+      JWT_SECRET: nimbus-super-secret-key-change-in-production
+    ports:
+      - "8080:8080"
+    depends_on:
+      - postgres
+    volumes:
+      - ${HOME}/.kube/config:/home/nimbus/.kube/config:ro
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api
+
+volumes:
+  postgres-data:
