@@ -26,6 +26,7 @@ type server struct {
 	tenants     *tenant.DBStore
 	provisioner *tenant.Provisioner
 	billing     *billing.Engine
+	scheduler   *scheduler.Scheduler
 }
 
 func main() {
@@ -71,6 +72,7 @@ func main() {
 		tenants:     dbStore,
 		provisioner: provisioner,
 		billing:     billingEngine,
+		scheduler:   sched,
 	}
 
 	mux := http.NewServeMux()
@@ -80,6 +82,7 @@ func main() {
 	mux.HandleFunc("/tenants/", srv.handleTenantByID)
 	mux.HandleFunc("/billing/usage", srv.handleUsage)
 	mux.HandleFunc("/billing/invoice/", srv.handleInvoice)
+	mux.HandleFunc("/scheduler/status", srv.handleSchedulerStatus)
 	mux.Handle("/metrics", promhttp.Handler())
 
 	handler := middleware.CORS(middleware.Auth(metricsMiddleware(mux)))
@@ -268,6 +271,34 @@ func (s *server) handleInvoice(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, s.billing.GenerateInvoice(tenantID))
+}
+
+func (s *server) handleSchedulerStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+
+	status := s.scheduler.GetStatus()
+	if middleware.IsAdmin(r.Context()) {
+		writeJSON(w, http.StatusOK, status)
+		return
+	}
+
+	tenantID, err := middleware.TenantIDFromContext(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
+		return
+	}
+
+	filteredPods := make([]scheduler.ScheduledPod, 0, len(status.Pods))
+	for _, pod := range status.Pods {
+		if pod.TenantID == tenantID {
+			filteredPods = append(filteredPods, pod)
+		}
+	}
+	status.Pods = filteredPods
+	writeJSON(w, http.StatusOK, status)
 }
 
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {

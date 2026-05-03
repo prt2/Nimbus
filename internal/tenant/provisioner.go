@@ -85,6 +85,10 @@ func (p *Provisioner) createResourceQuota(ctx context.Context, t *Tenant) error 
 // Deleting the namespace automatically deletes everything inside it.
 func (p *Provisioner) Deprovision(ctx context.Context, t *Tenant) error {
 	err := p.k8s.CoreV1().Namespaces().Delete(ctx, t.Namespace, metav1.DeleteOptions{})
+	if err != nil && errors.IsNotFound(err) {
+		fmt.Printf("Tenant namespace %s already absent, removing tenant record\n", t.Namespace)
+		return nil
+	}
 	if err != nil {
 		return fmt.Errorf("failed to delete namespace: %w", err)
 	}

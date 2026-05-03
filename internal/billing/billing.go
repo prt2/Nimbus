@@ -36,10 +36,12 @@ type Invoice struct {
 	GeneratedAt time.Time
 }
 
-// Pricing constants — fake money but real math
+// Pricing constants for the demo dashboard.
+// These are intentionally exaggerated so short-lived workloads still
+// produce readable invoice totals during local testing.
 const (
-	CPUCostPerMillicoreHour = 0.00001  // $ per millicore per hour
-	MemoryCostPerMBHour     = 0.000001 // $ per MB per hour
+	CPUCostPerMillicoreHour = 0.01 // $ per millicore per hour
+	MemoryCostPerMBHour     = 0.05 // $ per MB per hour
 )
 
 // Engine scrapes pod resource usage per tenant namespace

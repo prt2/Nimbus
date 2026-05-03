@@ -1,365 +1,708 @@
 import { useState, useEffect, useCallback } from "react";
-import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, BarChart, Bar, Cell } from "recharts";
-import { login, fetchTenants, fetchUsage, fetchInvoice, createTenant, deleteTenant } from './api';
-
-const API = "http://localhost:8080";
+import {
+  AreaChart,
+  Area,
+  XAxis,
+  YAxis,
+  Tooltip,
+  ResponsiveContainer,
+  BarChart,
+  Bar,
+  LineChart,
+  Line,
+  CartesianGrid,
+} from "recharts";
+import {
+  login,
+  fetchTenants,
+  fetchUsage,
+  fetchInvoice,
+  fetchSchedulerStatus,
+  createTenant,
+  deleteTenant,
+} from "./api";
 
 const theme = {
-  bg: "#0a0e1a",
-  surface: "#111827",
-  border: "#1e293b",
-  accent: "#3b82f6",
-  accentGlow: "#3b82f620",
-  green: "#10b981",
-  red: "#ef4444",
-  yellow: "#f59e0b",
-  text: "#f1f5f9",
-  muted: "#64748b",
+  bg: "#f4f7fb",
+  surface: "#ffffff",
+  surfaceAlt: "#f8fafc",
+  border: "#d9e2ec",
+  text: "#17212b",
+  muted: "#5b6b7b",
+  blue: "#2563eb",
+  teal: "#0f766e",
+  amber: "#d97706",
+  red: "#dc2626",
+  shadow: "0 8px 24px rgba(15, 23, 42, 0.06)",
 };
 
 const css = `
-  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Syne:wght@400;600;800&display=swap');
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 
-  * { margin: 0; padding: 0; box-sizing: border-box; }
+  * { box-sizing: border-box; }
 
   body {
+    margin: 0;
     background: ${theme.bg};
     color: ${theme.text};
-    font-family: 'Syne', sans-serif;
-    min-height: 100vh;
+    font-family: 'Inter', sans-serif;
   }
 
-  .app { display: flex; min-height: 100vh; }
+  button, input {
+    font: inherit;
+  }
+
+  .app {
+    min-height: 100vh;
+    display: grid;
+    grid-template-columns: 220px minmax(0, 1fr);
+  }
 
   .sidebar {
-    width: 220px;
     background: ${theme.surface};
     border-right: 1px solid ${theme.border};
     padding: 24px 16px;
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    position: fixed;
-    height: 100vh;
   }
 
-  .logo {
-    font-family: 'Syne', sans-serif;
-    font-weight: 800;
-    font-size: 22px;
-    color: ${theme.accent};
-    letter-spacing: -0.5px;
-    padding: 0 8px 24px;
+  .brand {
+    padding: 4px 8px 20px;
+    margin-bottom: 16px;
     border-bottom: 1px solid ${theme.border};
-    margin-bottom: 12px;
   }
 
-  .logo span { color: ${theme.muted}; font-weight: 400; font-size: 11px; display: block; margin-top: 2px; }
+  .brand-title {
+    font-size: 22px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+  }
+
+  .brand-subtitle {
+    margin-top: 6px;
+    font-size: 13px;
+    color: ${theme.muted};
+  }
+
+  .nav {
+    display: grid;
+    gap: 6px;
+  }
 
   .nav-item {
-    padding: 10px 12px;
-    border-radius: 8px;
-    cursor: pointer;
-    font-size: 13px;
-    font-weight: 600;
-    color: ${theme.muted};
-    transition: all 0.15s;
-    display: flex;
-    align-items: center;
-    gap: 10px;
     border: 1px solid transparent;
+    background: transparent;
+    border-radius: 10px;
+    padding: 10px 12px;
+    text-align: left;
+    cursor: pointer;
+    color: ${theme.text};
   }
 
-  .nav-item:hover { background: ${theme.accentGlow}; color: ${theme.text}; }
-  .nav-item.active { background: ${theme.accentGlow}; color: ${theme.accent}; border-color: ${theme.accent}40; }
+  .nav-item:hover {
+    background: ${theme.surfaceAlt};
+  }
 
-  .main { margin-left: 220px; flex: 1; padding: 32px; }
+  .nav-item.active {
+    background: #eef4ff;
+    border-color: #bfdbfe;
+    color: ${theme.blue};
+  }
+
+  .nav-label {
+    font-size: 14px;
+    font-weight: 600;
+  }
+
+  .nav-copy {
+    margin-top: 4px;
+    font-size: 12px;
+    line-height: 1.4;
+    color: ${theme.muted};
+  }
+
+  .sidebar-footer {
+    margin-top: 20px;
+    padding: 12px;
+    border: 1px solid ${theme.border};
+    border-radius: 10px;
+    background: ${theme.surfaceAlt};
+    font-size: 12px;
+    color: ${theme.muted};
+    line-height: 1.5;
+  }
+
+  .main {
+    padding: 28px;
+  }
+
+  .header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 16px;
+    margin-bottom: 24px;
+  }
 
   .page-title {
     font-size: 28px;
-    font-weight: 800;
-    margin-bottom: 8px;
-    letter-spacing: -0.5px;
+    font-weight: 700;
+    letter-spacing: -0.03em;
+    margin: 0 0 8px;
   }
 
-  .page-sub { color: ${theme.muted}; font-size: 13px; margin-bottom: 32px; font-family: 'JetBrains Mono', monospace; }
+  .page-subtitle {
+    max-width: 720px;
+    font-size: 14px;
+    line-height: 1.6;
+    color: ${theme.muted};
+  }
 
-  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px; }
-  .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; margin-bottom: 16px; }
+  .button {
+    border: 1px solid ${theme.border};
+    background: ${theme.surface};
+    color: ${theme.text};
+    border-radius: 10px;
+    padding: 10px 14px;
+    cursor: pointer;
+    font-weight: 600;
+  }
+
+  .button:disabled {
+    cursor: not-allowed;
+    opacity: 0.7;
+  }
+
+  .button:hover {
+    background: ${theme.surfaceAlt};
+  }
+
+  .button-primary {
+    background: ${theme.blue};
+    border-color: ${theme.blue};
+    color: white;
+  }
+
+  .button-primary:hover {
+    background: #1d4ed8;
+  }
+
+  .button-danger {
+    color: ${theme.red};
+    background: #fff5f5;
+    border-color: #fecaca;
+  }
+
+  .grid-4,
+  .grid-2 {
+    display: grid;
+    gap: 16px;
+    margin-bottom: 16px;
+  }
+
+  .grid-4 {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .grid-2 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 
   .card {
     background: ${theme.surface};
     border: 1px solid ${theme.border};
-    border-radius: 12px;
-    padding: 20px;
+    border-radius: 14px;
+    padding: 18px;
+    box-shadow: ${theme.shadow};
   }
 
   .card-title {
-    font-size: 11px;
+    font-size: 14px;
     font-weight: 600;
-    color: ${theme.muted};
-    text-transform: uppercase;
-    letter-spacing: 1px;
-    margin-bottom: 12px;
+    margin-bottom: 14px;
   }
 
-  .stat-value {
-    font-size: 36px;
-    font-weight: 800;
-    letter-spacing: -1px;
+  .metric-label {
+    font-size: 13px;
+    color: ${theme.muted};
+  }
+
+  .metric-value {
+    margin-top: 6px;
+    font-size: 30px;
+    font-weight: 700;
+    letter-spacing: -0.03em;
+  }
+
+  .metric-note {
+    margin-top: 8px;
+    font-size: 12px;
+    line-height: 1.5;
+    color: ${theme.muted};
+  }
+
+  .stack {
+    display: grid;
+    gap: 12px;
+  }
+
+  .form-grid {
+    display: grid;
+    grid-template-columns: 1.3fr 1fr 1fr auto;
+    gap: 12px;
+    align-items: end;
+  }
+
+  .field {
+    display: grid;
+    gap: 6px;
+  }
+
+  .label {
+    font-size: 12px;
+    font-weight: 600;
+    color: ${theme.muted};
+  }
+
+  .input {
+    width: 100%;
+    border: 1px solid ${theme.border};
+    border-radius: 10px;
+    background: ${theme.surface};
+    padding: 10px 12px;
     color: ${theme.text};
   }
 
-  .stat-sub { font-size: 12px; color: ${theme.muted}; margin-top: 4px; font-family: 'JetBrains Mono', monospace; }
+  .input:focus {
+    outline: 2px solid rgba(37, 99, 235, 0.12);
+    border-color: #93c5fd;
+  }
+
+  .table {
+    width: 100%;
+    border-collapse: collapse;
+  }
+
+  .table th {
+    padding: 0 0 12px;
+    border-bottom: 1px solid ${theme.border};
+    text-align: left;
+    font-size: 12px;
+    font-weight: 600;
+    color: ${theme.muted};
+  }
+
+  .table td {
+    padding: 14px 0;
+    border-bottom: 1px solid #edf2f7;
+    font-size: 14px;
+    vertical-align: middle;
+  }
+
+  .table tr:last-child td {
+    border-bottom: none;
+  }
+
+  .strong {
+    font-weight: 600;
+  }
+
+  .mono {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px;
+  }
+
+  .muted {
+    color: ${theme.muted};
+  }
 
   .badge {
     display: inline-flex;
     align-items: center;
-    gap: 4px;
-    padding: 3px 8px;
-    border-radius: 20px;
-    font-size: 11px;
-    font-weight: 700;
-    font-family: 'JetBrains Mono', monospace;
-  }
-
-  .badge-green { background: ${theme.green}20; color: ${theme.green}; }
-  .badge-blue { background: ${theme.accent}20; color: ${theme.accent}; }
-  .badge-red { background: ${theme.red}20; color: ${theme.red}; }
-  .badge-yellow { background: ${theme.yellow}20; color: ${theme.yellow}; }
-
-  .table { width: 100%; border-collapse: collapse; }
-  .table th { text-align: left; font-size: 11px; color: ${theme.muted}; font-weight: 600; text-transform: uppercase; letter-spacing: 0.8px; padding: 8px 12px; border-bottom: 1px solid ${theme.border}; }
-  .table td { padding: 12px; font-size: 13px; border-bottom: 1px solid ${theme.border}10; font-family: 'JetBrains Mono', monospace; }
-  .table tr:hover td { background: ${theme.accentGlow}; }
-
-  .btn {
-    padding: 8px 16px;
-    border-radius: 8px;
-    font-size: 13px;
-    font-weight: 700;
-    cursor: pointer;
-    border: none;
-    font-family: 'Syne', sans-serif;
-    transition: all 0.15s;
-  }
-
-  .btn-primary { background: ${theme.accent}; color: white; }
-  .btn-primary:hover { background: #2563eb; transform: translateY(-1px); }
-  .btn-danger { background: ${theme.red}20; color: ${theme.red}; border: 1px solid ${theme.red}40; }
-  .btn-danger:hover { background: ${theme.red}40; }
-
-  .input {
-    background: ${theme.bg};
-    border: 1px solid ${theme.border};
-    border-radius: 8px;
-    padding: 8px 12px;
-    color: ${theme.text};
-    font-size: 13px;
-    font-family: 'JetBrains Mono', monospace;
-    outline: none;
-    width: 100%;
-    transition: border-color 0.15s;
-  }
-
-  .input:focus { border-color: ${theme.accent}; }
-
-  .form-row { display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; margin-bottom: 20px; }
-  .form-group { display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 120px; }
-  .form-label { font-size: 11px; color: ${theme.muted}; font-weight: 600; text-transform: uppercase; letter-spacing: 0.8px; }
-
-  .pulse { width: 8px; height: 8px; border-radius: 50%; background: ${theme.green}; animation: pulse 2s infinite; }
-  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
-
-  .node-bar { height: 8px; border-radius: 4px; background: ${theme.border}; overflow: hidden; margin-top: 6px; }
-  .node-bar-fill { height: 100%; border-radius: 4px; background: linear-gradient(90deg, ${theme.accent}, ${theme.green}); transition: width 0.5s ease; }
-
-  .refresh-btn {
-    background: none;
-    border: 1px solid ${theme.border};
-    color: ${theme.muted};
-    padding: 6px 12px;
-    border-radius: 6px;
+    border-radius: 999px;
+    padding: 6px 10px;
     font-size: 12px;
-    cursor: pointer;
-    font-family: 'JetBrains Mono', monospace;
-    transition: all 0.15s;
+    font-weight: 600;
   }
-  .refresh-btn:hover { border-color: ${theme.accent}; color: ${theme.accent}; }
 
-  .header-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 32px; }
-  .empty { text-align: center; padding: 40px; color: ${theme.muted}; font-family: 'JetBrains Mono', monospace; font-size: 13px; }
+  .badge-blue {
+    background: #dbeafe;
+    color: ${theme.blue};
+  }
+
+  .badge-teal {
+    background: #ccfbf1;
+    color: ${theme.teal};
+  }
+
+  .badge-amber {
+    background: #fef3c7;
+    color: ${theme.amber};
+  }
+
+  .meter {
+    margin-top: 8px;
+    height: 8px;
+    border-radius: 999px;
+    background: #e5edf5;
+    overflow: hidden;
+  }
+
+  .meter-fill {
+    height: 100%;
+    border-radius: 999px;
+  }
+
+  .empty {
+    padding: 24px 0;
+    font-size: 14px;
+    color: ${theme.muted};
+  }
+
+  .error {
+    font-size: 13px;
+    color: ${theme.red};
+  }
+
+  .row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+  }
+
+  @media (max-width: 1100px) {
+    .grid-4,
+    .grid-2,
+    .form-grid {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  @media (max-width: 860px) {
+    .app {
+      grid-template-columns: 1fr;
+    }
+
+    .sidebar {
+      border-right: none;
+      border-bottom: 1px solid ${theme.border};
+    }
+
+    .main {
+      padding: 20px;
+    }
+
+    .header,
+    .row {
+      flex-direction: column;
+      align-items: flex-start;
+    }
+  }
 `;
 
-// ── Sidebar ────────────────────────────────────────────────────
 const PAGES = [
-  { id: "overview", label: "Overview" },
-  { id: "tenants", label: "Tenants" },
-  { id: "workloads", label: "Workloads" },
-  { id: "billing", label: "Billing" },
-  { id: "scheduler", label: "Scheduler" },
+  { id: "overview", label: "Overview", copy: "Cluster summary" },
+  { id: "tenants", label: "Tenants", copy: "Namespaces and quotas" },
+  { id: "workloads", label: "Workloads", copy: "Current tenant activity" },
+  { id: "billing", label: "Billing", copy: "Usage and invoices" },
+  { id: "scheduler", label: "Scheduler", copy: "Placement behavior" },
 ];
+
+function formatSeconds(value) {
+  const seconds = Number(value || 0) / 1000;
+  if (seconds === 0) return "0.0s";
+  if (seconds < 0.1) return `${seconds.toFixed(3)}s`;
+  return `${seconds.toFixed(1)}s`;
+}
+
+function formatMoney(value) {
+  const amount = Number(value || 0);
+  if (amount === 0) return "$0.000000";
+  if (Math.abs(amount) < 0.000001) {
+    return `$${amount.toExponential(2)}`;
+  }
+  return `$${amount.toFixed(6)}`;
+}
+const clamp = (value, max = 100) => Math.max(0, Math.min(value, max));
+
+function usageForTenant(usage, tenantID) {
+  return usage[tenantID] || null;
+}
+
+function activityPercent(record) {
+  if (!record) return 0;
+  return clamp(record.PodCount * 18 + record.CPUMilliSeconds / 250, 100);
+}
+
+function normalizeTenantName(value) {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9-]/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
+}
 
 function Sidebar({ page, setPage }) {
   return (
-    <div className="sidebar">
-      <div className="logo">
-        NIMBUS
-        <span>cloud control plane</span>
+    <aside className="sidebar">
+      <div className="brand">
+        <div className="brand-title">Nimbus</div>
+        <div className="brand-subtitle">Tenant control plane</div>
       </div>
-      {PAGES.map((p) => (
-        <div
-          key={p.id}
-          className={`nav-item ${page === p.id ? "active" : ""}`}
-          onClick={() => setPage(p.id)}
-        >
-          {p.label}
+
+      <div className="nav">
+        {PAGES.map((item) => (
+          <button
+            key={item.id}
+            className={`nav-item ${page === item.id ? "active" : ""}`}
+            onClick={() => setPage(item.id)}
+          >
+            <div className="nav-label">{item.label}</div>
+            <div className="nav-copy">{item.copy}</div>
+          </button>
+        ))}
+      </div>
+
+      <div className="sidebar-footer">
+        Refresh runs every 15 seconds.
+      </div>
+    </aside>
+  );
+}
+
+function PageHeader({ title, subtitle, onRefresh, refreshing, lastUpdated }) {
+  return (
+    <div className="header">
+      <div>
+        <h1 className="page-title">{title}</h1>
+        <div className="page-subtitle">{subtitle}</div>
+        <div className="metric-note" style={{ marginTop: 8 }}>
+          {lastUpdated ? `Last updated ${lastUpdated.toLocaleTimeString()}` : "Waiting for first refresh"}
         </div>
-      ))}
-      <div style={{ marginTop: "auto", padding: "8px 12px", display: "flex", alignItems: "center", gap: "8px" }}>
-        <div className="pulse" />
-        <span style={{ fontSize: "11px", color: theme.muted, fontFamily: "JetBrains Mono" }}>API connected</span>
       </div>
+      <button className="button" onClick={onRefresh} disabled={refreshing}>
+        {refreshing ? "Refreshing..." : "Refresh"}
+      </button>
     </div>
   );
 }
 
-// ── Overview ───────────────────────────────────────────────────
-function Overview({ tenants, usage }) {
-  const totalPods = Object.values(usage).reduce((s, u) => s + u.PodCount, 0);
-  const totalCPU = Object.values(usage).reduce((s, u) => s + u.CPUMilliSeconds, 0);
+function Overview({ tenants, usage, refresh, refreshing, lastUpdated }) {
+  const records = Object.values(usage);
+  const activeTenants = records.filter((record) => record.PodCount > 0).length;
+  const totalPods = records.reduce((sum, record) => sum + record.PodCount, 0);
+  const totalCPU = records.reduce((sum, record) => sum + record.CPUMilliSeconds, 0);
+  const totalMemory = records.reduce((sum, record) => sum + record.MemoryMBSeconds, 0);
 
-  const chartData = tenants.map((t) => ({
-    name: t.name,
-    pods: usage[t.id]?.PodCount || 0,
-    cpu: usage[t.id]?.CPUMilliSeconds || 0,
+  const chartData = tenants.map((tenant) => ({
+    name: tenant.name,
+    pods: usageForTenant(usage, tenant.id)?.PodCount || 0,
+    cpu: Number(((usageForTenant(usage, tenant.id)?.CPUMilliSeconds || 0) / 1000).toFixed(3)),
   }));
 
   return (
     <div>
-      <div className="page-title">Overview</div>
-      <div className="page-sub">$ nimbus status --all-tenants</div>
+      <PageHeader
+        title="Overview"
+        subtitle="Tenant count, active workloads, and tracked usage."
+        onRefresh={refresh}
+        refreshing={refreshing}
+        lastUpdated={lastUpdated}
+      />
 
-      <div className="grid-3">
+      <div className="grid-4">
         <div className="card">
-          <div className="card-title">Active Tenants</div>
-          <div className="stat-value">{tenants.length}</div>
-          <div className="stat-sub">namespaces provisioned</div>
+          <div className="metric-label">Tenants</div>
+          <div className="metric-value">{tenants.length}</div>
+          <div className="metric-note">Namespaces managed by Nimbus.</div>
         </div>
         <div className="card">
-          <div className="card-title">Running Pods</div>
-          <div className="stat-value" style={{ color: theme.green }}>{totalPods}</div>
-          <div className="stat-sub">across all tenants</div>
+          <div className="metric-label">Active Tenants</div>
+          <div className="metric-value">{activeTenants}</div>
+          <div className="metric-note">Tenants with running pods.</div>
         </div>
         <div className="card">
-          <div className="card-title">CPU Tracked</div>
-          <div className="stat-value" style={{ color: theme.accent }}>{(totalCPU / 1000).toFixed(1)}s</div>
-          <div className="stat-sub">millicore-seconds accumulated</div>
+          <div className="metric-label">Pods</div>
+          <div className="metric-value">{totalPods}</div>
+          <div className="metric-note">Pods tracked across tenant namespaces.</div>
+        </div>
+        <div className="card">
+          <div className="metric-label">CPU Tracked</div>
+          <div className="metric-value">{formatSeconds(totalCPU)}</div>
+          <div className="metric-note">Accumulated millicore-seconds.</div>
+        </div>
+      </div>
+
+      <div className="grid-2">
+        <div className="card">
+          <div className="card-title">Pods by Tenant</div>
+          {chartData.length === 0 ? (
+            <div className="empty">No tenant data.</div>
+          ) : (
+            <ResponsiveContainer width="100%" height={260}>
+              <BarChart data={chartData}>
+                <CartesianGrid vertical={false} stroke="#edf2f7" />
+                <XAxis dataKey="name" tick={{ fill: theme.muted, fontSize: 12 }} axisLine={false} tickLine={false} />
+                <YAxis tick={{ fill: theme.muted, fontSize: 12 }} axisLine={false} tickLine={false} />
+                <Tooltip />
+                <Bar dataKey="pods" fill={theme.blue} radius={[6, 6, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          )}
+        </div>
+
+        <div className="card">
+          <div className="card-title">CPU by Tenant</div>
+          {chartData.length === 0 ? (
+            <div className="empty">No usage data.</div>
+          ) : (
+            <ResponsiveContainer width="100%" height={260}>
+              <LineChart data={chartData}>
+                <CartesianGrid vertical={false} stroke="#edf2f7" />
+                <XAxis dataKey="name" tick={{ fill: theme.muted, fontSize: 12 }} axisLine={false} tickLine={false} />
+                <YAxis tick={{ fill: theme.muted, fontSize: 12 }} axisLine={false} tickLine={false} />
+                <Tooltip />
+                <Line type="monotone" dataKey="cpu" stroke={theme.teal} strokeWidth={2.5} dot={{ r: 3 }} />
+              </LineChart>
+            </ResponsiveContainer>
+          )}
         </div>
       </div>
 
       <div className="card">
-        <div className="card-title">Pod Distribution by Tenant</div>
-        {chartData.length === 0 ? (
-          <div className="empty">No tenants yet — create one to see data</div>
-        ) : (
-          <ResponsiveContainer width="100%" height={200}>
-            <BarChart data={chartData}>
-              <XAxis dataKey="name" tick={{ fill: theme.muted, fontSize: 12 }} />
-              <YAxis tick={{ fill: theme.muted, fontSize: 12 }} />
-              <Tooltip contentStyle={{ background: theme.surface, border: `1px solid ${theme.border}`, borderRadius: 8 }} />
-              <Bar dataKey="pods" radius={[4, 4, 0, 0]}>
-                {chartData.map((_, i) => (
-                  <Cell key={i} fill={i % 2 === 0 ? theme.accent : theme.green} />
-                ))}
-              </Bar>
-            </BarChart>
-          </ResponsiveContainer>
-        )}
+        <div className="card-title">Usage Summary</div>
+        <div className="stack">
+          <div className="row">
+            <span className="muted">Memory tracked</span>
+            <span className="strong">{formatSeconds(totalMemory)}</span>
+          </div>
+          <div className="row">
+            <span className="muted">Refresh interval</span>
+            <span className="strong">15s</span>
+          </div>
+        </div>
       </div>
     </div>
   );
 }
 
-// ── Tenants ────────────────────────────────────────────────────
-function Tenants({ tenants, refresh }) {
+function Tenants({ tenants, refresh, refreshing, lastUpdated }) {
   const [name, setName] = useState("");
-  const [cpu, setCpu] = useState("500m");
-  const [mem, setMem] = useState("512Mi");
+  const [cpu, setCPU] = useState("500m");
+  const [memory, setMemory] = useState("512Mi");
   const [loading, setLoading] = useState(false);
+  const [deletingID, setDeletingID] = useState("");
   const [error, setError] = useState("");
 
   async function handleCreate() {
-    if (!name) return;
-    setLoading(true);
-    setError("");
-    const res = await createTenant(name, cpu, mem);
-    setLoading(false);
-    if (res.error) { setError(res.error); return; }
-    setName("");
-    refresh();
+    const normalizedName = normalizeTenantName(name);
+    if (!normalizedName) {
+      setError("Enter a lowercase name using letters, numbers, or hyphens.");
+      return;
+    }
+
+    try {
+      setLoading(true);
+      setError("");
+      await createTenant(normalizedName, cpu, memory);
+      setName("");
+      await refresh();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
   }
 
   async function handleDelete(id) {
-    await deleteTenant(id);
-    refresh();
+    try {
+      setDeletingID(id);
+      setError("");
+      await deleteTenant(id);
+      await refresh();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setDeletingID("");
+    }
   }
 
   return (
     <div>
-      <div className="page-title">Tenants</div>
-      <div className="page-sub">$ nimbus tenant list</div>
+      <PageHeader
+        title="Tenants"
+        subtitle="Create tenants and manage namespace quotas."
+        onRefresh={refresh}
+        refreshing={refreshing}
+        lastUpdated={lastUpdated}
+      />
 
       <div className="card" style={{ marginBottom: 16 }}>
         <div className="card-title">Create Tenant</div>
-        <div className="form-row">
-          <div className="form-group">
-            <div className="form-label">Name</div>
-            <input className="input" value={name} onChange={e => setName(e.target.value)} placeholder="acme-corp" />
+        <div className="form-grid">
+          <div className="field">
+            <label className="label">Name</label>
+            <input
+              className="input"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="tenant-name"
+            />
           </div>
-          <div className="form-group">
-            <div className="form-label">CPU Quota</div>
-            <input className="input" value={cpu} onChange={e => setCpu(e.target.value)} placeholder="500m" />
+          <div className="field">
+            <label className="label">CPU Quota</label>
+            <input className="input" value={cpu} onChange={(e) => setCPU(e.target.value)} placeholder="500m" />
           </div>
-          <div className="form-group">
-            <div className="form-label">Memory Quota</div>
-            <input className="input" value={mem} onChange={e => setMem(e.target.value)} placeholder="512Mi" />
+          <div className="field">
+            <label className="label">Memory Quota</label>
+            <input className="input" value={memory} onChange={(e) => setMemory(e.target.value)} placeholder="512Mi" />
           </div>
-          <button className="btn btn-primary" onClick={handleCreate} disabled={loading}>
-            {loading ? "Creating..." : "+ Create"}
+          <button className="button button-primary" onClick={handleCreate} disabled={loading}>
+            {loading ? "Creating..." : "Create"}
           </button>
         </div>
-        {error && <div style={{ color: theme.red, fontSize: 13, fontFamily: "JetBrains Mono" }}>{error}</div>}
+        <div className="metric-note" style={{ marginTop: 12 }}>
+          Tenant names become Kubernetes namespace slugs. Use lowercase letters, numbers, and hyphens.
+        </div>
+        {error ? <div className="error" style={{ marginTop: 12 }}>{error}</div> : null}
       </div>
 
       <div className="card">
-        <div className="card-title">All Tenants ({tenants.length})</div>
+        <div className="row" style={{ marginBottom: 16 }}>
+          <div className="card-title" style={{ marginBottom: 0 }}>Tenant List</div>
+          <span className="badge badge-blue">{tenants.length} total</span>
+        </div>
+
         {tenants.length === 0 ? (
-          <div className="empty">No tenants yet</div>
+          <div className="empty">No tenants found.</div>
         ) : (
           <table className="table">
             <thead>
               <tr>
                 <th>Name</th>
                 <th>Namespace</th>
-                <th>CPU Quota</th>
+                <th>CPU</th>
                 <th>Memory</th>
                 <th>Created</th>
-                <th>Status</th>
                 <th></th>
               </tr>
             </thead>
             <tbody>
-              {tenants.map(t => (
-                <tr key={t.id}>
-                  <td style={{ color: theme.text, fontWeight: 600 }}>{t.name}</td>
-                  <td style={{ color: theme.muted }}>{t.namespace}</td>
-                  <td>{t.cpu_quota}</td>
-                  <td>{t.memory_quota}</td>
-                  <td style={{ color: theme.muted }}>{new Date(t.created_at).toLocaleDateString()}</td>
-                  <td><span className="badge badge-green">● Active</span></td>
+              {tenants.map((tenant) => (
+                <tr key={tenant.id}>
+                  <td className="strong">{tenant.name}</td>
+                  <td className="mono muted">{tenant.namespace}</td>
+                  <td className="mono">{tenant.cpu_quota}</td>
+                  <td className="mono">{tenant.memory_quota}</td>
+                  <td className="muted">{new Date(tenant.created_at).toLocaleDateString()}</td>
                   <td>
-                    <button className="btn btn-danger" onClick={() => handleDelete(t.id)}>Delete</button>
+                    <button
+                      className="button button-danger"
+                      onClick={() => handleDelete(tenant.id)}
+                      disabled={deletingID === tenant.id}
+                    >
+                      {deletingID === tenant.id ? "Deleting..." : "Delete"}
+                    </button>
                   </td>
                 </tr>
               ))}
@@ -371,95 +714,188 @@ function Tenants({ tenants, refresh }) {
   );
 }
 
-// ── Workloads ──────────────────────────────────────────────────
-function Workloads({ tenants, usage }) {
+function Workloads({ tenants, usage, refresh, refreshing, lastUpdated }) {
   return (
     <div>
-      <div className="page-title">Workloads</div>
-      <div className="page-sub">$ nimbus workloads --watch</div>
+      <PageHeader
+        title="Workloads"
+        subtitle="Current activity for each tenant namespace."
+        onRefresh={refresh}
+        refreshing={refreshing}
+        lastUpdated={lastUpdated}
+      />
 
       {tenants.length === 0 ? (
-        <div className="card"><div className="empty">No tenants — create one first</div></div>
+        <div className="card">
+          <div className="empty">No workloads to show.</div>
+        </div>
       ) : (
-        tenants.map(t => {
-          const u = usage[t.id];
-          return (
-            <div className="card" key={t.id} style={{ marginBottom: 12 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-                <div>
-                  <span style={{ fontWeight: 700, fontSize: 15 }}>{t.name}</span>
-                  <span style={{ color: theme.muted, fontSize: 12, marginLeft: 8, fontFamily: "JetBrains Mono" }}>{t.namespace}</span>
+        <div className="stack">
+          {tenants.map((tenant) => {
+            const record = usageForTenant(usage, tenant.id);
+            const activity = activityPercent(record);
+
+            return (
+              <div className="card" key={tenant.id}>
+                <div className="row" style={{ marginBottom: 14 }}>
+                  <div>
+                    <div className="strong">{tenant.name}</div>
+                    <div className="mono muted" style={{ marginTop: 4 }}>{tenant.namespace}</div>
+                  </div>
+                  <span className={`badge ${record?.PodCount ? "badge-teal" : "badge-amber"}`}>
+                    {record?.PodCount ? `${record.PodCount} pods` : "Idle"}
+                  </span>
                 </div>
-                <span className="badge badge-blue">{u?.PodCount || 0} pods running</span>
+
+                <div className="grid-4" style={{ marginBottom: 0 }}>
+                  <div>
+                    <div className="metric-label">CPU Quota</div>
+                    <div className="strong mono" style={{ marginTop: 6 }}>{tenant.cpu_quota}</div>
+                  </div>
+                  <div>
+                    <div className="metric-label">Memory Quota</div>
+                    <div className="strong mono" style={{ marginTop: 6 }}>{tenant.memory_quota}</div>
+                  </div>
+                  <div>
+                    <div className="metric-label">CPU Tracked</div>
+                    <div className="strong" style={{ marginTop: 6 }}>{formatSeconds(record?.CPUMilliSeconds)}</div>
+                  </div>
+                  <div>
+                    <div className="metric-label">Memory Tracked</div>
+                    <div className="strong" style={{ marginTop: 6 }}>{formatSeconds(record?.MemoryMBSeconds)}</div>
+                  </div>
+                </div>
+
+                <div className="meter">
+                  <div className="meter-fill" style={{ width: `${activity}%`, background: theme.blue }} />
+                </div>
               </div>
-              <div className="grid-3">
-                <div>
-                  <div style={{ fontSize: 11, color: theme.muted, marginBottom: 4 }}>CPU QUOTA</div>
-                  <div style={{ fontFamily: "JetBrains Mono", fontSize: 13 }}>{t.cpu_quota}</div>
-                  <div className="node-bar"><div className="node-bar-fill" style={{ width: "30%" }} /></div>
-                </div>
-                <div>
-                  <div style={{ fontSize: 11, color: theme.muted, marginBottom: 4 }}>MEMORY QUOTA</div>
-                  <div style={{ fontFamily: "JetBrains Mono", fontSize: 13 }}>{t.memory_quota}</div>
-                  <div className="node-bar"><div className="node-bar-fill" style={{ width: "20%", background: `linear-gradient(90deg, ${theme.green}, ${theme.yellow})` }} /></div>
-                </div>
-                <div>
-                  <div style={{ fontSize: 11, color: theme.muted, marginBottom: 4 }}>SCHEDULER</div>
-                  <div style={{ fontFamily: "JetBrains Mono", fontSize: 13, color: theme.accent }}>nimbus-scheduler</div>
-                </div>
-              </div>
-            </div>
-          );
-        })
+            );
+          })}
+        </div>
       )}
     </div>
   );
 }
 
-// ── Billing ────────────────────────────────────────────────────
-function Billing({ tenants, usage }) {
+function Billing({ tenants, usage, refresh, refreshVersion, refreshing, lastUpdated }) {
   const [invoices, setInvoices] = useState({});
+  const [invoiceError, setInvoiceError] = useState("");
 
   useEffect(() => {
-    tenants.forEach(async t => {
-      const inv = await fetchInvoice(t.id);
-      setInvoices(prev => ({ ...prev, [t.id]: inv }));
-    });
-  }, [tenants]);
+    let active = true;
 
-  const usageHistory = tenants.map(t => ({
-    name: t.name,
-    cpu: (usage[t.id]?.CPUMilliSeconds || 0) / 1000,
-    memory: (usage[t.id]?.MemoryMBSeconds || 0) / 1000,
-    cost: invoices[t.id]?.TotalCost || 0,
+    async function loadInvoices() {
+      try {
+        setInvoiceError("");
+        const entries = await Promise.all(
+          tenants.map(async (tenant) => [tenant.id, await fetchInvoice(tenant.id)])
+        );
+
+        if (!active) return;
+        setInvoices(Object.fromEntries(entries));
+      } catch (err) {
+        if (!active) return;
+        setInvoiceError(err.message);
+      }
+    }
+
+    if (tenants.length === 0) {
+      setInvoices({});
+      return () => {
+        active = false;
+      };
+    }
+
+    loadInvoices();
+    return () => {
+      active = false;
+    };
+  }, [tenants, refreshVersion]);
+
+  const usageData = tenants.map((tenant) => ({
+    name: tenant.name,
+    cpu: (usage[tenant.id]?.CPUMilliSeconds || 0) / 1000,
+    memory: (usage[tenant.id]?.MemoryMBSeconds || 0) / 1000,
+    total: invoices[tenant.id]?.TotalCost || 0,
   }));
+
+  const totalBilled = Object.values(invoices).reduce(
+    (sum, invoice) => sum + (invoice?.TotalCost || 0),
+    0
+  );
 
   return (
     <div>
-      <div className="page-title">Billing</div>
-      <div className="page-sub">$ nimbus billing --period 2026-02</div>
+      <PageHeader
+        title="Billing"
+        subtitle="Usage totals and generated invoices."
+        onRefresh={refresh}
+        refreshing={refreshing}
+        lastUpdated={lastUpdated}
+      />
 
-      <div className="card" style={{ marginBottom: 16 }}>
-        <div className="card-title">Usage by Tenant</div>
-        {usageHistory.length === 0 ? (
-          <div className="empty">No usage data yet</div>
-        ) : (
-          <ResponsiveContainer width="100%" height={200}>
-            <AreaChart data={usageHistory}>
-              <XAxis dataKey="name" tick={{ fill: theme.muted, fontSize: 12 }} />
-              <YAxis tick={{ fill: theme.muted, fontSize: 12 }} />
-              <Tooltip contentStyle={{ background: theme.surface, border: `1px solid ${theme.border}`, borderRadius: 8 }} />
-              <Area type="monotone" dataKey="cpu" stroke={theme.accent} fill={theme.accentGlow} strokeWidth={2} />
-              <Area type="monotone" dataKey="memory" stroke={theme.green} fill={`${theme.green}15`} strokeWidth={2} />
-            </AreaChart>
-          </ResponsiveContainer>
-        )}
+      <div className="grid-4">
+        <div className="card">
+          <div className="metric-label">Invoices</div>
+          <div className="metric-value">{Object.keys(invoices).length}</div>
+        </div>
+        <div className="card">
+          <div className="metric-label">Usage Records</div>
+          <div className="metric-value">{Object.keys(usage).length}</div>
+        </div>
+        <div className="card">
+          <div className="metric-label">Total Billed</div>
+          <div className="metric-value" style={{ fontSize: 24 }}>{formatMoney(totalBilled)}</div>
+        </div>
+        <div className="card">
+          <div className="metric-label">Billing Loop</div>
+          <div className="metric-value">30s</div>
+        </div>
+      </div>
+
+      <div className="grid-2">
+        <div className="card">
+          <div className="card-title">Usage</div>
+          {usageData.length === 0 ? (
+            <div className="empty">No usage data.</div>
+          ) : (
+            <ResponsiveContainer width="100%" height={260}>
+              <AreaChart data={usageData}>
+                <CartesianGrid vertical={false} stroke="#edf2f7" />
+                <XAxis dataKey="name" tick={{ fill: theme.muted, fontSize: 12 }} axisLine={false} tickLine={false} />
+                <YAxis tick={{ fill: theme.muted, fontSize: 12 }} axisLine={false} tickLine={false} />
+                <Tooltip />
+                <Area type="monotone" dataKey="cpu" stroke={theme.blue} fill="#dbeafe" strokeWidth={2} />
+                <Area type="monotone" dataKey="memory" stroke={theme.teal} fill="#ccfbf1" strokeWidth={2} />
+              </AreaChart>
+            </ResponsiveContainer>
+          )}
+        </div>
+
+        <div className="card">
+          <div className="card-title">Invoice Totals</div>
+          {usageData.length === 0 ? (
+            <div className="empty">No invoice data.</div>
+          ) : (
+            <ResponsiveContainer width="100%" height={260}>
+              <BarChart data={usageData}>
+                <CartesianGrid vertical={false} stroke="#edf2f7" />
+                <XAxis dataKey="name" tick={{ fill: theme.muted, fontSize: 12 }} axisLine={false} tickLine={false} />
+                <YAxis tick={{ fill: theme.muted, fontSize: 12 }} axisLine={false} tickLine={false} />
+                <Tooltip formatter={(value) => formatMoney(value)} />
+                <Bar dataKey="total" fill={theme.amber} radius={[6, 6, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          )}
+        </div>
       </div>
 
       <div className="card">
         <div className="card-title">Invoices</div>
+        {invoiceError ? <div className="error" style={{ marginBottom: 12 }}>{invoiceError}</div> : null}
         {tenants.length === 0 ? (
-          <div className="empty">No tenants to invoice</div>
+          <div className="empty">No tenants found.</div>
         ) : (
           <table className="table">
             <thead>
@@ -469,20 +905,18 @@ function Billing({ tenants, usage }) {
                 <th>CPU Cost</th>
                 <th>Memory Cost</th>
                 <th>Total</th>
-                <th>Status</th>
               </tr>
             </thead>
             <tbody>
-              {tenants.map(t => {
-                const inv = invoices[t.id];
+              {tenants.map((tenant) => {
+                const invoice = invoices[tenant.id];
                 return (
-                  <tr key={t.id}>
-                    <td style={{ color: theme.text, fontWeight: 600 }}>{t.name}</td>
-                    <td>{inv?.Period || "—"}</td>
-                    <td style={{ color: theme.accent }}>${inv?.CPUCost?.toFixed(6) || "0.000000"}</td>
-                    <td style={{ color: theme.green }}>${inv?.MemoryCost?.toFixed(6) || "0.000000"}</td>
-                    <td style={{ color: theme.yellow, fontWeight: 700 }}>${inv?.TotalCost?.toFixed(6) || "0.000000"}</td>
-                    <td><span className="badge badge-yellow">● Pending</span></td>
+                  <tr key={tenant.id}>
+                    <td className="strong">{tenant.name}</td>
+                    <td className="mono muted">{invoice?.Period || "-"}</td>
+                  <td>{formatMoney(invoice?.CPUCost)}</td>
+                  <td>{formatMoney(invoice?.MemoryCost)}</td>
+                  <td className="strong">{formatMoney(invoice?.TotalCost)}</td>
                   </tr>
                 );
               })}
@@ -494,92 +928,170 @@ function Billing({ tenants, usage }) {
   );
 }
 
-// ── Scheduler ─────────────────────────────────────────────────
-function Scheduler({ usage }) {
-  const totalPods = Object.values(usage).reduce((s, u) => s + u.PodCount, 0);
-  const score = Math.min(totalPods * 10, 100);
+function Scheduler({ schedulerStatus, refresh, refreshing, lastUpdated }) {
+  const activePods = schedulerStatus?.pods || [];
+  const recentBindings = schedulerStatus?.recentBindings || [];
+  const nodes = schedulerStatus?.nodes || [];
+  const pressure = schedulerStatus?.pressure || 0;
+  const pendingPods = schedulerStatus?.pendingPods || 0;
+  const scheduledPods = schedulerStatus?.scheduledPods || 0;
 
   return (
     <div>
-      <div className="page-title">Scheduler</div>
-      <div className="page-sub">$ nimbus scheduler --strategy bin-pack</div>
+      <PageHeader
+        title="Scheduler"
+        subtitle="Live scheduler state from the custom Nimbus scheduling loop."
+        onRefresh={refresh}
+        refreshing={refreshing}
+        lastUpdated={lastUpdated}
+      />
+
+      <div className="grid-4">
+        <div className="card">
+          <div className="metric-label">Mode</div>
+          <div className="metric-value" style={{ fontSize: 22 }}>Bin-pack</div>
+        </div>
+        <div className="card">
+          <div className="metric-label">Interval</div>
+          <div className="metric-value">5s</div>
+        </div>
+        <div className="card">
+          <div className="metric-label">Pending Pods</div>
+          <div className="metric-value">{pendingPods}</div>
+        </div>
+        <div className="card">
+          <div className="metric-label">Scheduled Pods</div>
+          <div className="metric-value">{scheduledPods}</div>
+        </div>
+        <div className="card">
+          <div className="metric-label">Pressure</div>
+          <div className="metric-value">{pressure}%</div>
+        </div>
+      </div>
 
       <div className="grid-2">
         <div className="card">
-          <div className="card-title">Strategy</div>
-          <div style={{ fontSize: 20, fontWeight: 800, color: theme.accent, marginBottom: 8 }}>Bin Packing</div>
-          <div style={{ fontSize: 13, color: theme.muted, lineHeight: 1.6 }}>
-            Fills nodes with maximum utilization before using new ones.
-            Scores nodes by existing CPU usage — higher usage = preferred node.
+          <div className="card-title">Placement Pressure</div>
+          <div className="meter">
+            <div className="meter-fill" style={{ width: `${pressure}%`, background: theme.blue }} />
+          </div>
+          <div className="metric-note" style={{ marginTop: 12 }}>
+            Based on running pods currently managed by the custom scheduler.
           </div>
         </div>
+
         <div className="card">
-          <div className="card-title">Node: nimbus-control-plane</div>
-          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
-            <span style={{ fontSize: 13, color: theme.muted }}>CPU Utilization</span>
-            <span style={{ fontFamily: "JetBrains Mono", fontSize: 13, color: theme.accent }}>{score}%</span>
-          </div>
-          <div className="node-bar">
-            <div className="node-bar-fill" style={{ width: `${score}%` }} />
-          </div>
-          <div style={{ marginTop: 12, fontSize: 12, color: theme.muted, fontFamily: "JetBrains Mono" }}>
-            {totalPods} pods scheduled by nimbus-scheduler
-          </div>
+          <div className="card-title">Recent Bindings</div>
+          {recentBindings.length === 0 ? (
+            <div className="empty">No scheduler bindings recorded yet.</div>
+          ) : (
+            <div className="stack">
+              {recentBindings.slice(0, 4).map((binding) => (
+                <div className="row" key={`${binding.namespace}-${binding.podName}-${binding.timestamp}`}>
+                  <span className="strong">{binding.podName}</span>
+                  <span className="mono muted">{binding.nodeName}</span>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
+      </div>
+
+      <div className="card" style={{ marginBottom: 16 }}>
+        <div className="card-title">Node Scores</div>
+        {nodes.length === 0 ? (
+          <div className="empty">No node metrics available.</div>
+        ) : (
+          <table className="table">
+            <thead>
+              <tr>
+                <th>Node</th>
+                <th>CPU Utilization</th>
+                <th>Schedulable</th>
+              </tr>
+            </thead>
+            <tbody>
+              {nodes.map((node) => (
+                <tr key={node.nodeName}>
+                  <td className="strong">{node.nodeName}</td>
+                  <td>{node.cpuUtilization}%</td>
+                  <td>
+                    <span className={`badge ${node.schedulable ? "badge-teal" : "badge-amber"}`}>
+                      {node.schedulable ? "Yes" : "No"}
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
       </div>
 
       <div className="card">
-        <div className="card-title">Scoring Algorithm</div>
-        <div style={{ fontFamily: "JetBrains Mono", fontSize: 13, color: theme.muted, lineHeight: 2 }}>
-          <div><span style={{ color: theme.accent }}>score</span> = (totalCPURequested × 100) / nodeAllocatableCPU</div>
-          <div><span style={{ color: theme.green }}>bind</span> = highest scoring schedulable node</div>
-          <div><span style={{ color: theme.yellow }}>interval</span> = 5s reconcile loop</div>
-          <div><span style={{ color: theme.muted }}>filter</span> = exclude unschedulable / cordoned nodes</div>
-        </div>
-      </div>
-
-      <div className="card" style={{ marginTop: 16 }}>
-        <div className="card-title">Recent Scheduling Decisions</div>
-        <table className="table">
-          <thead>
-            <tr><th>Pod</th><th>Namespace</th><th>Node</th><th>Strategy</th><th>Score</th></tr>
-          </thead>
-          <tbody>
-            {Object.entries(usage).map(([tenantID, u]) =>
-              u.PodCount > 0 ? (
-                <tr key={tenantID}>
-                  <td>nimbus-workload-*</td>
-                  <td style={{ color: theme.muted }}>{u.TenantName ? `nimbus-${u.TenantName}` : tenantID}</td>
-                  <td style={{ color: theme.green }}>nimbus-control-plane</td>
-                  <td><span className="badge badge-blue">bin-pack</span></td>
-                  <td style={{ color: theme.accent }}>{score}</td>
+        <div className="card-title">Scheduled Pods</div>
+        {activePods.length === 0 ? (
+          <div className="empty">No custom-scheduled pods found.</div>
+        ) : (
+          <table className="table">
+            <thead>
+              <tr>
+                <th>Pod</th>
+                <th>Namespace</th>
+                <th>Node</th>
+                <th>Phase</th>
+              </tr>
+            </thead>
+            <tbody>
+              {activePods.map((pod) => (
+                <tr key={`${pod.namespace}-${pod.name}`}>
+                  <td className="strong">{pod.name}</td>
+                  <td className="mono muted">{pod.namespace}</td>
+                  <td className="mono muted">{pod.nodeName || "-"}</td>
+                  <td>{pod.phase}</td>
                 </tr>
-              ) : null
-            )}
-            {totalPods === 0 && <tr><td colSpan={5}><div className="empty">No scheduled pods yet</div></td></tr>}
-          </tbody>
-        </table>
+              ))}
+            </tbody>
+          </table>
+        )}
       </div>
     </div>
   );
 }
 
-// ── App ────────────────────────────────────────────────────────
 export default function App() {
   const [page, setPage] = useState("overview");
   const [tenants, setTenants] = useState([]);
   const [usage, setUsage] = useState({});
+  const [schedulerStatus, setSchedulerStatus] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [refreshVersion, setRefreshVersion] = useState(0);
+  const [refreshing, setRefreshing] = useState(false);
+  const [lastUpdated, setLastUpdated] = useState(null);
 
   const refresh = useCallback(async () => {
-  try {
-    await login();
-    const [t, u] = await Promise.all([fetchTenants(), fetchUsage()]);
-    setTenants(t);
-    setUsage(u);
-  } catch (e) {
-    console.error("API error:", e);
-  }
-}, []);
+    try {
+      setRefreshing(true);
+      setError("");
+      await login();
+      const [tenantData, usageData, nextSchedulerStatus] = await Promise.all([
+        fetchTenants(),
+        fetchUsage(),
+        fetchSchedulerStatus(),
+      ]);
+      setTenants(tenantData);
+      setUsage(usageData);
+      setSchedulerStatus(nextSchedulerStatus);
+      setRefreshVersion((version) => version + 1);
+      setLastUpdated(new Date());
+    } catch (error) {
+      console.error("API error:", error);
+      setError(error.message);
+    } finally {
+      setRefreshing(false);
+      setLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
     refresh();
@@ -592,17 +1104,64 @@ export default function App() {
       <style>{css}</style>
       <div className="app">
         <Sidebar page={page} setPage={setPage} />
-        <div className="main">
-          <div className="header-row">
-            <div />
-            <button className="refresh-btn" onClick={refresh}>Refresh</button>
-          </div>
-          {page === "overview" && <Overview tenants={tenants} usage={usage} />}
-          {page === "tenants" && <Tenants tenants={tenants} refresh={refresh} />}
-          {page === "workloads" && <Workloads tenants={tenants} usage={usage} />}
-          {page === "billing" && <Billing tenants={tenants} usage={usage} />}
-          {page === "scheduler" && <Scheduler usage={usage} />}
-        </div>
+        <main className="main">
+          {loading ? (
+            <div className="card">
+              <div className="card-title">Loading</div>
+              <div className="empty">Fetching tenant and billing data.</div>
+            </div>
+          ) : null}
+          {!loading && error ? (
+            <div className="card">
+              <div className="card-title">Connection Error</div>
+              <div className="error">{error}</div>
+            </div>
+          ) : null}
+          {!loading && !error && page === "overview" && (
+            <Overview
+              tenants={tenants}
+              usage={usage}
+              refresh={refresh}
+              refreshing={refreshing}
+              lastUpdated={lastUpdated}
+            />
+          )}
+          {!loading && !error && page === "tenants" && (
+            <Tenants
+              tenants={tenants}
+              refresh={refresh}
+              refreshing={refreshing}
+              lastUpdated={lastUpdated}
+            />
+          )}
+          {!loading && !error && page === "workloads" && (
+            <Workloads
+              tenants={tenants}
+              usage={usage}
+              refresh={refresh}
+              refreshing={refreshing}
+              lastUpdated={lastUpdated}
+            />
+          )}
+          {!loading && !error && page === "billing" && (
+            <Billing
+              tenants={tenants}
+              usage={usage}
+              refresh={refresh}
+              refreshVersion={refreshVersion}
+              refreshing={refreshing}
+              lastUpdated={lastUpdated}
+            />
+          )}
+          {!loading && !error && page === "scheduler" && (
+            <Scheduler
+              schedulerStatus={schedulerStatus}
+              refresh={refresh}
+              refreshing={refreshing}
+              lastUpdated={lastUpdated}
+            />
+          )}
+        </main>
       </div>
     </>
   );

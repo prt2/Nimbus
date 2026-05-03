@@ -165,6 +165,135 @@ Frontend URL:
 http://localhost:3000
 ```
 
+## End-to-End Demo
+
+This is the quickest way to make the dashboard show real activity.
+
+### 1. Create an admin token
+
+```bash
+TOKEN=$(curl -s -X POST http://localhost:8080/auth/token \
+  -H 'Content-Type: application/json' \
+  -d '{"tenant_id":"admin","tenant_name":"admin"}' | jq -r .token)
+```
+
+### 2. Create a tenant
+
+```bash
+curl -s -X POST http://localhost:8080/tenants \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"tenant-a","cpu_quota":"500m","memory_quota":"512Mi"}'
+```
+
+Verify it:
+
+```bash
+kubectl get ns nimbus-tenant-a
+kubectl get resourcequota -n nimbus-tenant-a
+curl -s http://localhost:8080/tenants -H "Authorization: Bearer $TOKEN"
+```
+
+### 3. Create a workload for that tenant
+
+```bash
+kubectl apply -f - <<'EOF'
+apiVersion: nimbus.io/v1
+kind: ComputeRequest
+metadata:
+  name: web-server
+  namespace: nimbus-tenant-a
+spec:
+  tenantId: tenant-a
+  image: nginx
+  cpu: "200m"
+  memory: "256Mi"
+  replicas: 1
+EOF
+```
+
+Verify it:
+
+```bash
+kubectl get computerequest -n nimbus-tenant-a
+kubectl get deployment -n nimbus-tenant-a
+kubectl get pods -n nimbus-tenant-a -o wide
+```
+
+Expected result:
+
+- the controller creates `deployment/nimbus-web-server`
+- the pod starts in `nimbus-tenant-a`
+- the pod uses `nimbus-scheduler`
+- the scheduler binds it to a node
+
+You can check the scheduler assignment directly:
+
+```bash
+kubectl get pod -n nimbus-tenant-a -o jsonpath='{range .items[*]}{.metadata.name}{"  scheduler="}{.spec.schedulerName}{"  node="}{.spec.nodeName}{"\n"}{end}'
+```
+
+### 4. Refresh the frontend
+
+Open `http://localhost:3000` and click `Refresh`.
+
+What should update:
+
+- `Tenants`: `tenant-a` appears
+- `Workloads`: tenant is no longer idle
+- `Overview`: pod count is above 0
+- `Scheduler`: scheduled pod, node score, and recent binding appear
+- `Billing`: usage starts showing after the next billing loop
+
+### 5. Wait for billing
+
+The billing engine samples usage every 30 seconds.
+
+After about 30 to 60 seconds:
+
+```bash
+curl -s http://localhost:8080/billing/usage \
+  -H "Authorization: Bearer $TOKEN"
+
+curl -s http://localhost:8080/billing/invoice/tenant-a \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+Expected result:
+
+- `CPUMilliSeconds` and `MemoryMBSeconds` start increasing
+- invoice totals become non-zero
+
+### 6. Optional: watch it live
+
+```bash
+kubectl get pods -n nimbus-tenant-a -w
+```
+
+## What To Check In The UI
+
+If everything is working, the dashboard should show:
+
+- `Overview`: `Tenants = 1`, `Active Tenants = 1`, `Pods = 1`
+- `Workloads`: `tenant-a` with `1 pod`
+- `Scheduler`: one scheduled pod and one recent binding
+- `Billing`: one usage record and a non-zero invoice after the billing loop runs
+
+## Why The Dashboard Can Look Empty
+
+If the tenant exists but the pages still show zeros, the usual reason is:
+
+- you created a tenant, but not a workload
+
+A tenant only creates:
+
+- a Postgres record
+- a Kubernetes namespace
+- a `ResourceQuota`
+
+It does not create a pod by itself.  
+To make `Overview`, `Workloads`, `Scheduler`, and `Billing` show activity, you need a `ComputeRequest`.
+
 ## Run With Docker Compose
 
 ```bash

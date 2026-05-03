@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"sync"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -22,6 +23,40 @@ const SchedulerName = "nimbus-scheduler"
 type Scheduler struct {
 	k8s     kubernetes.Interface
 	dynamic dynamic.Interface
+	mu      sync.RWMutex
+	status  StatusSnapshot
+}
+
+type NodeStatus struct {
+	NodeName       string `json:"nodeName"`
+	CPUUtilization int64  `json:"cpuUtilization"`
+	Schedulable    bool   `json:"schedulable"`
+}
+
+type BindingEvent struct {
+	PodName   string    `json:"podName"`
+	Namespace string    `json:"namespace"`
+	NodeName  string    `json:"nodeName"`
+	Timestamp time.Time `json:"timestamp"`
+}
+
+type ScheduledPod struct {
+	Name       string `json:"name"`
+	Namespace  string `json:"namespace"`
+	NodeName   string `json:"nodeName"`
+	TenantID   string `json:"tenantId"`
+	TenantName string `json:"tenantName"`
+	Phase      string `json:"phase"`
+}
+
+type StatusSnapshot struct {
+	LastRun        time.Time       `json:"lastRun"`
+	PendingPods    int             `json:"pendingPods"`
+	ScheduledPods  int             `json:"scheduledPods"`
+	Pressure       int64           `json:"pressure"`
+	Nodes          []NodeStatus    `json:"nodes"`
+	RecentBindings []BindingEvent  `json:"recentBindings"`
+	Pods           []ScheduledPod  `json:"pods"`
 }
 
 // NodeScore holds a node and its computed score.
@@ -42,7 +77,11 @@ func NewScheduler() (*Scheduler, error) {
 		return nil, fmt.Errorf("failed to create dynamic client: %w", err)
 	}
 
-	return &Scheduler{k8s: client, dynamic: dynamicClient}, nil
+	return &Scheduler{
+		k8s:     client,
+		dynamic: dynamicClient,
+		status:  StatusSnapshot{},
+	}, nil
 }
 
 // Start begins the scheduling loop.
@@ -66,6 +105,8 @@ func (s *Scheduler) Start(ctx context.Context) {
 }
 
 func (s *Scheduler) scheduleAll(ctx context.Context) {
+	s.refreshStatus(ctx)
+
 	// Find all pods that:
 	// 1. Want OUR scheduler (schedulerName: nimbus-scheduler)
 	// 2. Haven't been assigned a node yet (nodeName is empty)
@@ -88,6 +129,8 @@ func (s *Scheduler) scheduleAll(ctx context.Context) {
 			fmt.Printf("Failed to schedule pod %s: %v\n", pod.Name, err)
 		}
 	}
+
+	s.refreshStatus(ctx)
 }
 
 func (s *Scheduler) schedulePod(ctx context.Context, pod *corev1.Pod) error {
@@ -119,7 +162,11 @@ func (s *Scheduler) schedulePod(ctx context.Context, pod *corev1.Pod) error {
 	fmt.Printf("Selected node %s with score %d\n", best.NodeName, best.Score)
 
 	// Step 5: Bind the pod to that node
-	return s.bindPod(ctx, pod, best.NodeName)
+	if err := s.bindPod(ctx, pod, best.NodeName); err != nil {
+		return err
+	}
+	s.recordBinding(pod, best.NodeName)
+	return nil
 }
 
 // scoreNodes scores each node using a bin-packing strategy.
@@ -207,4 +254,114 @@ func cpuUtilizationScore(usedCPUMilli, totalCPUMilli int64) int64 {
 		return 0
 	}
 	return (usedCPUMilli * 100) / totalCPUMilli
+}
+
+func (s *Scheduler) refreshStatus(ctx context.Context) {
+	pendingPods, err := s.k8s.CoreV1().Pods("").List(ctx, metav1.ListOptions{
+		FieldSelector: "spec.schedulerName=nimbus-scheduler,spec.nodeName=",
+	})
+	if err != nil {
+		return
+	}
+
+	allSchedulerPods, err := s.k8s.CoreV1().Pods("").List(ctx, metav1.ListOptions{
+		FieldSelector: "spec.schedulerName=nimbus-scheduler",
+	})
+	if err != nil {
+		return
+	}
+
+	nodes, err := s.k8s.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return
+	}
+
+	nodeMetrics, err := kubeutil.ListNodeMetrics(ctx, s.dynamic)
+	if err != nil {
+		return
+	}
+
+	metricByNode := make(map[string]kubeutil.NodeMetric, len(nodeMetrics))
+	for _, metric := range nodeMetrics {
+		metricByNode[metric.Name] = metric
+	}
+
+	nodeStatuses := make([]NodeStatus, 0, len(nodes.Items))
+	for _, node := range nodes.Items {
+		metric := metricByNode[node.Name]
+		allocatableCPU := node.Status.Allocatable[corev1.ResourceCPU]
+		totalCPU := allocatableCPU.MilliValue()
+		utilization := cpuUtilizationScore(metric.CPUMilli, totalCPU)
+		nodeStatuses = append(nodeStatuses, NodeStatus{
+			NodeName:       node.Name,
+			CPUUtilization: utilization,
+			Schedulable:    !node.Spec.Unschedulable,
+		})
+	}
+
+	sort.Slice(nodeStatuses, func(i, j int) bool {
+		return nodeStatuses[i].CPUUtilization > nodeStatuses[j].CPUUtilization
+	})
+
+	scheduledPods := make([]ScheduledPod, 0, len(allSchedulerPods.Items))
+	activeScheduledPods := 0
+	for _, pod := range allSchedulerPods.Items {
+		tenantID := pod.Labels["tenant"]
+		tenantName := pod.Namespace
+		if len(tenantName) > len("nimbus-") && tenantName[:len("nimbus-")] == "nimbus-" {
+			tenantName = tenantName[len("nimbus-"):]
+		}
+		scheduledPods = append(scheduledPods, ScheduledPod{
+			Name:       pod.Name,
+			Namespace:  pod.Namespace,
+			NodeName:   pod.Spec.NodeName,
+			TenantID:   tenantID,
+			TenantName: tenantName,
+			Phase:      string(pod.Status.Phase),
+		})
+		if pod.Spec.NodeName != "" && pod.Status.Phase == corev1.PodRunning {
+			activeScheduledPods++
+		}
+	}
+
+	pressure := int64(activeScheduledPods * 20)
+	if pressure > 100 {
+		pressure = 100
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.status.LastRun = time.Now()
+	s.status.PendingPods = len(pendingPods.Items)
+	s.status.ScheduledPods = activeScheduledPods
+	s.status.Pressure = pressure
+	s.status.Nodes = nodeStatuses
+	s.status.Pods = scheduledPods
+}
+
+func (s *Scheduler) recordBinding(pod *corev1.Pod, nodeName string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.status.RecentBindings = append([]BindingEvent{{
+		PodName:   pod.Name,
+		Namespace: pod.Namespace,
+		NodeName:  nodeName,
+		Timestamp: time.Now(),
+	}}, s.status.RecentBindings...)
+
+	if len(s.status.RecentBindings) > 10 {
+		s.status.RecentBindings = s.status.RecentBindings[:10]
+	}
+}
+
+func (s *Scheduler) GetStatus() StatusSnapshot {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	status := s.status
+	status.Nodes = append([]NodeStatus(nil), s.status.Nodes...)
+	status.Pods = append([]ScheduledPod(nil), s.status.Pods...)
+	status.RecentBindings = append([]BindingEvent(nil), s.status.RecentBindings...)
+	return status
 }
