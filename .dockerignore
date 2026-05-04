@@ -1,3 +1,5 @@
+# Keep local dependencies, build output, and Git history out of the Docker build context.
+
 .git
 .gitignore
 frontend/node_modules

@@ -1,3 +1,6 @@
+// Reads Kubernetes usage metrics and converts resource strings into numbers.
+// CPU values use millicores (1000 = one core); memory values use bytes.
+
 package kubeutil
 
 import (
@@ -37,6 +40,7 @@ type NodeMetric struct {
 	MemoryBytes int64
 }
 
+// ListPodMetrics reads a namespace’s pod metrics and totals the containers inside each pod.
 func ListPodMetrics(ctx context.Context, client dynamic.Interface, namespace string) ([]PodMetric, error) {
 	list, err := client.Resource(podMetricsGVR).Namespace(namespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
@@ -60,6 +64,7 @@ func ListPodMetrics(ctx context.Context, client dynamic.Interface, namespace str
 	return metrics, nil
 }
 
+// ListNodeMetrics reads cluster-wide node metrics and converts each node’s usage values.
 func ListNodeMetrics(ctx context.Context, client dynamic.Interface) ([]NodeMetric, error) {
 	list, err := client.Resource(nodeMetricsGVR).List(ctx, metav1.ListOptions{})
 	if err != nil {
@@ -82,6 +87,7 @@ func ListNodeMetrics(ctx context.Context, client dynamic.Interface) ([]NodeMetri
 	return metrics, nil
 }
 
+// aggregateTopLevelUsage parses a node’s CPU and memory values, treating missing fields as zero.
 func aggregateTopLevelUsage(item unstructured.Unstructured) (int64, int64, error) {
 	usage, found, err := unstructured.NestedStringMap(item.Object, "usage")
 	if err != nil {
@@ -112,6 +118,7 @@ func aggregateTopLevelUsage(item unstructured.Unstructured) (int64, int64, error
 	return cpuMilli, memoryBytes, nil
 }
 
+// aggregateContainerUsage sums CPU and memory across containers, skipping entries without usable fields.
 func aggregateContainerUsage(item unstructured.Unstructured) (int64, int64, error) {
 	containers, found, err := unstructured.NestedSlice(item.Object, "containers")
 	if err != nil {

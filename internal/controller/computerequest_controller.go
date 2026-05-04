@@ -1,3 +1,6 @@
+// Turns ComputeRequest objects into Kubernetes deployments.
+// Flow: read requests -> create missing deployments -> write the result back to request status.
+
 package controller
 
 import (
@@ -54,6 +57,7 @@ var computeRequestGVR = schema.GroupVersionResource{
 	Resource: "computerequests",
 }
 
+// NewController creates clients for standard Kubernetes objects and custom requests.
 func NewController() (*Controller, error) {
 	// Need typed client for Deployments and dynamic client for the CRD.
 	k8sClient, err := kubeutil.NewKubernetesClient()
@@ -69,6 +73,7 @@ func NewController() (*Controller, error) {
 	return &Controller{k8s: k8sClient, dynamic: dynamicClient}, nil
 }
 
+// Start processes requests immediately and every 10 seconds until cancelled.
 func (c *Controller) Start(ctx context.Context) {
 	// Simple polling loop for now. Recheck everything every 10 seconds.
 	fmt.Println("ComputeRequest controller starting...")
@@ -87,6 +92,7 @@ func (c *Controller) Start(ctx context.Context) {
 	}
 }
 
+// reconcileAll reads custom resource objects and converts them into Go request values.
 func (c *Controller) reconcileAll(ctx context.Context) {
 	// Pull all requests and reconcile them one at a time.
 	list, err := c.dynamic.Resource(computeRequestGVR).
@@ -110,6 +116,7 @@ func (c *Controller) reconcileAll(ctx context.Context) {
 	}
 }
 
+// reconcile creates a deployment only when it is missing and records the creation result.
 func (c *Controller) reconcile(ctx context.Context, cr *ComputeRequest) {
 	// Keep names deterministic so reconcile can find the same objects later.
 	namespace := "nimbus-" + cr.Spec.TenantID
@@ -136,6 +143,7 @@ func (c *Controller) reconcile(ctx context.Context, cr *ComputeRequest) {
 	}
 }
 
+// createDeployment sets the image, replica count, resource requests and limits, and custom scheduler.
 func (c *Controller) createDeployment(ctx context.Context, cr *ComputeRequest, namespace, name string) error {
 	// Default to one replica if the CR leaves it empty.
 	replicas := cr.Spec.Replicas
@@ -191,6 +199,7 @@ func (c *Controller) createDeployment(ctx context.Context, cr *ComputeRequest, n
 	return err
 }
 
+// updateStatus patches the request status without changing the user’s requested settings.
 func (c *Controller) updateStatus(ctx context.Context, cr *ComputeRequest, phase, deploymentName, message string) {
 	// Patch status separately so the CR shows what reconcile just did.
 	patch := map[string]interface{}{

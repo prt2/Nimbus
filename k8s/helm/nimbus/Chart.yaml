@@ -1,3 +1,5 @@
+# Helm package metadata: identifies this chart and the application version it describes.
+
 apiVersion: v2
 name: nimbus
 description: A Kubernetes-based multi-tenant cloud control plane

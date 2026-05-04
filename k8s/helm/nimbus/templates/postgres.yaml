@@ -1,3 +1,6 @@
+# Run Postgres and give it an internal service named postgres.
+# Its emptyDir storage lasts only for the lifetime of the pod.
+
 apiVersion: apps/v1
 kind: Deployment
 metadata:

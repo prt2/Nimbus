@@ -1,3 +1,6 @@
+// Defines tenant details and an optional in-memory tenant store.
+// The running API uses DBStore instead; this store keeps records only until the process stops.
+
 package tenant
 
 import (
@@ -27,12 +30,14 @@ type Store struct {
 	tenants map[string]*Tenant
 }
 
+// NewStore creates an empty in-memory tenant map.
 func NewStore() *Store {
 	return &Store{
 		tenants: make(map[string]*Tenant),
 	}
 }
 
+// Create rejects duplicate names and stores a new tenant while holding a write lock.
 func (s *Store) Create(name, cpuQuota, memoryQuota string) (*Tenant, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -57,6 +62,7 @@ func (s *Store) Create(name, cpuQuota, memoryQuota string) (*Tenant, error) {
 	return t, nil
 }
 
+// Get looks up a tenant by ID while holding a read lock.
 func (s *Store) Get(id string) (*Tenant, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -68,6 +74,7 @@ func (s *Store) Get(id string) (*Tenant, error) {
 	return t, nil
 }
 
+// List collects the stored tenant pointers while holding a read lock.
 func (s *Store) List() []*Tenant {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -79,6 +86,7 @@ func (s *Store) List() []*Tenant {
 	return list
 }
 
+// Delete removes a known tenant while holding a write lock.
 func (s *Store) Delete(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

@@ -1,3 +1,6 @@
+/* Original Create React App styles, currently not imported by the dashboard.
+   The active dashboard styles live in the css string in App.js. */
+
 .App {
   text-align: center;
 }
@@ -7,6 +10,7 @@
   pointer-events: none;
 }
 
+/* Animate the starter logo only when the user allows motion. */
 @media (prefers-reduced-motion: no-preference) {
   .App-logo {
     animation: App-logo-spin infinite 20s linear;

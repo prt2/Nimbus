@@ -1,3 +1,6 @@
+# Teach Kubernetes the ComputeRequest resource used to describe a tenant workload.
+# The schema defines accepted fields; the controller writes progress into the separate status section.
+
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:

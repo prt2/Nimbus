@@ -1,3 +1,5 @@
+// Builds shared Kubernetes clients using local or in-cluster connection settings.
+
 package kubeutil
 
 import (
@@ -12,6 +14,7 @@ import (
 	"k8s.io/client-go/util/homedir"
 )
 
+// LoadConfig tries KUBECONFIG first, then in-cluster credentials, then ~/.kube/config.
 func LoadConfig() (*rest.Config, error) {
 	if kubeconfig := os.Getenv("KUBECONFIG"); kubeconfig != "" {
 		return clientcmd.BuildConfigFromFlags("", kubeconfig)
@@ -25,6 +28,7 @@ func LoadConfig() (*rest.Config, error) {
 	return clientcmd.BuildConfigFromFlags("", kubeconfig)
 }
 
+// NewKubernetesClient creates a client for standard objects such as pods and deployments.
 func NewKubernetesClient() (kubernetes.Interface, error) {
 	config, err := LoadConfig()
 	if err != nil {
@@ -38,6 +42,7 @@ func NewKubernetesClient() (kubernetes.Interface, error) {
 	return client, nil
 }
 
+// NewDynamicClient creates a client for custom resources and metrics without fixed Go types.
 func NewDynamicClient() (dynamic.Interface, error) {
 	config, err := LoadConfig()
 	if err != nil {

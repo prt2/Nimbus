@@ -1,3 +1,5 @@
+// Creates a tenant namespace and resource quota, or deletes the namespace during cleanup.
+
 package tenant
 
 import (
@@ -19,6 +21,7 @@ type Provisioner struct {
 	k8s kubernetes.Interface
 }
 
+// NewProvisioner creates the Kubernetes client used to manage tenant resources.
 func NewProvisioner() (*Provisioner, error) {
 	// Nothing fancy here, just the normal typed client.
 	client, err := kubeutil.NewKubernetesClient()
@@ -42,6 +45,7 @@ func (p *Provisioner) Provision(ctx context.Context, t *Tenant) error {
 	return nil
 }
 
+// createNamespace labels a tenant’s namespace so background workers can discover it.
 func (p *Provisioner) createNamespace(ctx context.Context, t *Tenant) error {
 	// Labels are how the other loops find Nimbus namespaces later.
 	ns := &corev1.Namespace{
@@ -61,6 +65,7 @@ func (p *Provisioner) createNamespace(ctx context.Context, t *Tenant) error {
 	return err
 }
 
+// createResourceQuota caps total CPU requests, memory requests, and pod count in the namespace.
 func (p *Provisioner) createResourceQuota(ctx context.Context, t *Tenant) error {
 	// ResourceQuota enforces hard limits on what a tenant can consume.
 	// If a tenant tries to exceed these, Kubernetes rejects the request.

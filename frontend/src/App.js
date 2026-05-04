@@ -1,3 +1,6 @@
+// React dashboard for tenants, workloads, billing, and scheduler activity.
+// The helpers and page components below share data fetched by App at the end of this file.
+
 import { useState, useEffect, useCallback } from "react";
 import {
   AreaChart,
@@ -22,6 +25,7 @@ import {
   deleteTenant,
 } from "./api";
 
+// Shared colors and spacing effects used by the dashboard styles and charts.
 const theme = {
   bg: "#f4f7fb",
   surface: "#ffffff",
@@ -36,6 +40,7 @@ const theme = {
   shadow: "0 8px 24px rgba(15, 23, 42, 0.06)",
 };
 
+// Dashboard styles are inserted by App in a style tag. Narrow screens stack the columns.
 const css = `
   @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 
@@ -399,6 +404,7 @@ const css = `
   }
 `;
 
+// Navigation items match the page names checked by App below.
 const PAGES = [
   { id: "overview", label: "Overview", copy: "Cluster summary" },
   { id: "tenants", label: "Tenants", copy: "Namespaces and quotas" },
@@ -407,6 +413,8 @@ const PAGES = [
   { id: "scheduler", label: "Scheduler", copy: "Placement behavior" },
 ];
 
+// Divide the supplied value by 1000 and format it with an s suffix.
+// CPU millicore-seconds become core-seconds; memory totals use this same display helper.
 function formatSeconds(value) {
   const seconds = Number(value || 0) / 1000;
   if (seconds === 0) return "0.0s";
@@ -414,6 +422,7 @@ function formatSeconds(value) {
   return `${seconds.toFixed(1)}s`;
 }
 
+// Keep small demo charges visible instead of rounding them to zero cents.
 function formatMoney(value) {
   const amount = Number(value || 0);
   if (amount === 0) return "$0.000000";
@@ -422,17 +431,23 @@ function formatMoney(value) {
   }
   return `$${amount.toFixed(6)}`;
 }
+// Keep a meter value between zero and its maximum.
 const clamp = (value, max = 100) => Math.max(0, Math.min(value, max));
 
+// Find usage by tenant ID; a new tenant may not have a billing sample yet.
 function usageForTenant(usage, tenantID) {
   return usage[tenantID] || null;
 }
 
+// Build a simple visual activity score from pod count and accumulated CPU use.
+// This is a dashboard indicator rather than a measured resource percentage.
 function activityPercent(record) {
   if (!record) return 0;
   return clamp(record.PodCount * 18 + record.CPUMilliSeconds / 250, 100);
 }
 
+// Trim the name, lowercase it, and turn unsupported characters into hyphens.
+// This prepares a namespace-friendly name; the server and Kubernetes still validate the request.
 function normalizeTenantName(value) {
   return value
     .trim()
@@ -442,6 +457,7 @@ function normalizeTenantName(value) {
     .replace(/^-|-$/g, "");
 }
 
+// Show the navigation buttons and tell App which page the user selected.
 function Sidebar({ page, setPage }) {
   return (
     <aside className="sidebar">
@@ -470,6 +486,7 @@ function Sidebar({ page, setPage }) {
   );
 }
 
+// Reuse the title, last-refresh time, and manual refresh button on every page.
 function PageHeader({ title, subtitle, onRefresh, refreshing, lastUpdated }) {
   return (
     <div className="header">
@@ -487,6 +504,7 @@ function PageHeader({ title, subtitle, onRefresh, refreshing, lastUpdated }) {
   );
 }
 
+// Add up tenant activity and prepare one chart entry per tenant for the overview.
 function Overview({ tenants, usage, refresh, refreshing, lastUpdated }) {
   const records = Object.values(usage);
   const activeTenants = records.filter((record) => record.PodCount > 0).length;
@@ -586,6 +604,7 @@ function Overview({ tenants, usage, refresh, refreshing, lastUpdated }) {
   );
 }
 
+// Manage the create form, delete buttons, and errors for tenant administration.
 function Tenants({ tenants, refresh, refreshing, lastUpdated }) {
   const [name, setName] = useState("");
   const [cpu, setCPU] = useState("500m");
@@ -594,6 +613,7 @@ function Tenants({ tenants, refresh, refreshing, lastUpdated }) {
   const [deletingID, setDeletingID] = useState("");
   const [error, setError] = useState("");
 
+  // Clean the name, submit the quotas, clear the name field, and reload dashboard data.
   async function handleCreate() {
     const normalizedName = normalizeTenantName(name);
     if (!normalizedName) {
@@ -614,6 +634,7 @@ function Tenants({ tenants, refresh, refreshing, lastUpdated }) {
     }
   }
 
+  // Mark the selected row as busy, delete its tenant through the API, and refresh the list.
   async function handleDelete(id) {
     try {
       setDeletingID(id);
@@ -714,6 +735,7 @@ function Tenants({ tenants, refresh, refreshing, lastUpdated }) {
   );
 }
 
+// Show each tenant’s latest running-pod count and accumulated billing usage.
 function Workloads({ tenants, usage, refresh, refreshing, lastUpdated }) {
   return (
     <div>
@@ -778,16 +800,19 @@ function Workloads({ tenants, usage, refresh, refreshing, lastUpdated }) {
   );
 }
 
+// Load invoices for the visible tenants and show resource totals alongside costs.
 function Billing({ tenants, usage, refresh, refreshVersion, refreshing, lastUpdated }) {
   const [invoices, setInvoices] = useState({});
   const [invoiceError, setInvoiceError] = useState("");
 
   useEffect(() => {
+    // Ignore late invoice responses after this effect is cleaned up or restarted.
     let active = true;
 
     async function loadInvoices() {
       try {
         setInvoiceError("");
+        // Fetch invoices together, then turn [tenant ID, invoice] pairs into a lookup table.
         const entries = await Promise.all(
           tenants.map(async (tenant) => [tenant.id, await fetchInvoice(tenant.id)])
         );
@@ -813,6 +838,7 @@ function Billing({ tenants, usage, refresh, refreshVersion, refreshing, lastUpda
     };
   }, [tenants, refreshVersion]);
 
+  // Join tenant names, accumulated usage, and invoice totals for the charts.
   const usageData = tenants.map((tenant) => ({
     name: tenant.name,
     cpu: (usage[tenant.id]?.CPUMilliSeconds || 0) / 1000,
@@ -928,6 +954,7 @@ function Billing({ tenants, usage, refresh, refreshVersion, refreshing, lastUpda
   );
 }
 
+// Display the cached scheduler snapshot: waiting pods, node scores, and recent placements.
 function Scheduler({ schedulerStatus, refresh, refreshing, lastUpdated }) {
   const activePods = schedulerStatus?.pods || [];
   const recentBindings = schedulerStatus?.recentBindings || [];
@@ -1058,6 +1085,8 @@ function Scheduler({ schedulerStatus, refresh, refreshing, lastUpdated }) {
   );
 }
 
+// Own page selection and shared API data for the whole dashboard.
+// Flow: log in -> fetch tenants, usage, and scheduler status together -> render the selected page.
 export default function App() {
   const [page, setPage] = useState("overview");
   const [tenants, setTenants] = useState([]);
@@ -1069,10 +1098,12 @@ export default function App() {
   const [refreshing, setRefreshing] = useState(false);
   const [lastUpdated, setLastUpdated] = useState(null);
 
+  // Keep the refresh function stable so the timer effect does not restart on every render.
   const refresh = useCallback(async () => {
     try {
       setRefreshing(true);
       setError("");
+      // Request the demo admin token before calling the protected endpoints.
       await login();
       const [tenantData, usageData, nextSchedulerStatus] = await Promise.all([
         fetchTenants(),
@@ -1082,6 +1113,7 @@ export default function App() {
       setTenants(tenantData);
       setUsage(usageData);
       setSchedulerStatus(nextSchedulerStatus);
+      // Tell the billing page to reload invoices after a successful dashboard refresh.
       setRefreshVersion((version) => version + 1);
       setLastUpdated(new Date());
     } catch (error) {
@@ -1095,6 +1127,7 @@ export default function App() {
 
   useEffect(() => {
     refresh();
+    // Refresh every 15 seconds and remove the timer when this component is removed.
     const interval = setInterval(refresh, 15000);
     return () => clearInterval(interval);
   }, [refresh]);

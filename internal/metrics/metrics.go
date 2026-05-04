@@ -1,3 +1,6 @@
+// Defines and registers the measurements exposed by the API at /metrics.
+// Counters add up events, gauges show current values, and histograms group request times.
+
 package metrics
 
 import (

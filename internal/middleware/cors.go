@@ -1,7 +1,10 @@
+// Adds browser access headers and answers OPTIONS checks before a normal API request.
+
 package middleware
 
 import "net/http"
 
+// CORS lets browser clients call the API and handles preflight requests before authentication.
 func CORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")

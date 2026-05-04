@@ -1,3 +1,6 @@
+// Samples tenant resource use and turns accumulated usage into invoice amounts.
+// Flow: read running pod metrics -> add a 30-second sample -> save usage -> calculate costs on request.
+
 package billing
 
 import (
@@ -21,7 +24,7 @@ type UsageRecord struct {
 	// Running totals for the billing loop.
 	TenantID        string
 	TenantName      string
-	CPUMilliSeconds int64 // total CPU milliseconds consumed
+	CPUMilliSeconds int64 // total millicore-seconds consumed
 	MemoryMBSeconds int64 // total memory MB-seconds consumed
 	PodCount        int   // number of pods running
 	LastUpdated     time.Time
@@ -62,6 +65,7 @@ type UsageStore interface {
 	SaveUsage(tenantID string, cpuMS, memMBS int64, podCount int) error
 }
 
+// NewEngine prepares Kubernetes access and empty in-memory billing totals.
 func NewEngine(store UsageStore) (*Engine, error) {
 	// Need the normal client plus metrics.k8s.io access.
 	client, err := kubeutil.NewKubernetesClient()
@@ -85,7 +89,7 @@ func NewEngine(store UsageStore) (*Engine, error) {
 
 // Start begins the billing aggregation loop.
 // Every 30 seconds it scans all nimbus namespaces,
-// counts running pods, and accumulates usage.
+// counts running pods, and accumulates usage. The API reads these in-memory totals.
 func (e *Engine) Start(ctx context.Context) {
 	fmt.Println("Billing engine starting...")
 	ticker := time.NewTicker(30 * time.Second)
@@ -103,7 +107,7 @@ func (e *Engine) Start(ctx context.Context) {
 	}
 }
 
-// collect scans all nimbus-* namespaces and accumulates usage.
+// collect scans namespaces labeled managed-by=nimbus and accumulates usage.
 // This runs every 30 seconds — each tick adds 30 seconds worth
 // of resource consumption to each tenant's running total.
 func (e *Engine) collect(ctx context.Context) {
@@ -126,6 +130,7 @@ func (e *Engine) collect(ctx context.Context) {
 	}
 }
 
+// collectTenant estimates 30 seconds of use from current metrics and adds it to the tenant totals.
 func (e *Engine) collectTenant(ctx context.Context, tenantID, tenantName, namespace string) {
 	// Only count running pods here.
 	pods, err := e.k8s.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
@@ -179,7 +184,8 @@ func (e *Engine) collectTenant(ctx context.Context, tenantID, tenantName, namesp
 	record.LastUpdated = time.Now()
 
 	if e.usageStore != nil {
-		// Persist every sample so a restart does not wipe the totals.
+		// Add this sample to the database totals. API totals stay in memory and
+		// start from zero after a restart; this engine does not reload saved usage.
 		if err := e.usageStore.SaveUsage(tenantID, cpuMillis*intervalSeconds, memoryMB*intervalSeconds, len(pods.Items)); err != nil {
 			fmt.Printf("Billing: failed to persist usage for %s: %v\n", tenantID, err)
 		}
@@ -243,6 +249,7 @@ func (e *Engine) GenerateInvoice(tenantID string) *Invoice {
 	}
 }
 
+// currentPeriod returns the current year and month as the invoice label.
 func currentPeriod() string {
 	return time.Now().Format("2006-01")
 }

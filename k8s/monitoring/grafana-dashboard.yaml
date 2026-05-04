@@ -1,3 +1,7 @@
+# Store a Grafana dashboard as JSON inside a ConfigMap.
+# The grafana_dashboard label lets a configured Grafana sidecar discover it.
+# Panels query Nimbus request, usage, billing, and autoscaling metrics from Prometheus.
+
 apiVersion: v1
 kind: ConfigMap
 metadata:

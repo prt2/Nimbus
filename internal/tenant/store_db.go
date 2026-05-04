@@ -1,3 +1,6 @@
+// Stores tenant details and accumulated usage in PostgreSQL.
+// Flow: connect -> create missing tables -> read or write records using SQL parameters.
+
 package tenant
 
 import (
@@ -13,6 +16,7 @@ type DBStore struct {
 	db *sql.DB
 }
 
+// NewDBStore connects to Postgres, checks the connection, and creates missing tables.
 func NewDBStore(connStr string) (*DBStore, error) {
 	// sql.Open is lazy, so ping here and fail fast if Postgres is down.
 	db, err := sql.Open("postgres", connStr)
@@ -30,6 +34,7 @@ func NewDBStore(connStr string) (*DBStore, error) {
 	return store, nil
 }
 
+// migrate creates the tenant and usage tables if they do not already exist.
 func (s *DBStore) migrate() error {
 	// Keep bootstrap simple for local runs. Create tables if missing.
 	_, err := s.db.Exec(`
@@ -52,6 +57,7 @@ func (s *DBStore) migrate() error {
 	return err
 }
 
+// Create assigns a unique ID and inserts a tenant with its quotas and namespace name.
 func (s *DBStore) Create(name, cpuQuota, memoryQuota string) (*Tenant, error) {
 	// Namespace naming stays predictable so the rest of the code can derive it.
 	t := &Tenant{
@@ -73,6 +79,7 @@ func (s *DBStore) Create(name, cpuQuota, memoryQuota string) (*Tenant, error) {
 	return t, nil
 }
 
+// Get loads one tenant by its unique ID.
 func (s *DBStore) Get(id string) (*Tenant, error) {
 	// Normal lookup path from the API.
 	t := &Tenant{}
@@ -86,6 +93,7 @@ func (s *DBStore) Get(id string) (*Tenant, error) {
 	return t, err
 }
 
+// GetByName loads one tenant by its human-readable name.
 func (s *DBStore) GetByName(name string) (*Tenant, error) {
 	// Handy for endpoints that accept either ID or name.
 	t := &Tenant{}
@@ -99,6 +107,7 @@ func (s *DBStore) GetByName(name string) (*Tenant, error) {
 	return t, err
 }
 
+// List reads all tenants with the newest records first.
 func (s *DBStore) List() []*Tenant {
 	// Newest first reads a little better in the dashboard.
 	rows, err := s.db.Query(`
@@ -117,6 +126,7 @@ func (s *DBStore) List() []*Tenant {
 	return tenants
 }
 
+// Delete removes a tenant row and reports an error if the ID was absent.
 func (s *DBStore) Delete(id string) error {
 	// By the time this runs, the namespace should already be gone.
 	res, err := s.db.Exec(`DELETE FROM tenants WHERE id = $1`, id)
@@ -130,6 +140,7 @@ func (s *DBStore) Delete(id string) error {
 	return nil
 }
 
+// SaveUsage inserts the first usage sample or adds the sample to existing totals.
 func (s *DBStore) SaveUsage(tenantID string, cpuMS, memMBS int64, podCount int) error {
 	// Billing samples stack up over time, so add to the total instead of replacing it.
 	_, err := s.db.Exec(`

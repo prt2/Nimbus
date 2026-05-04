@@ -1,9 +1,12 @@
+// Browser entry point: load base styles, render App, and optionally collect performance data.
+
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import './index.css';
 import App from './App';
 import reportWebVitals from './reportWebVitals';
 
+// Mount the dashboard into the root element provided by public/index.html.
 const root = ReactDOM.createRoot(document.getElementById('root'));
 root.render(
   <React.StrictMode>

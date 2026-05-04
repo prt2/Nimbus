@@ -1,3 +1,6 @@
+// Assigns waiting Nimbus pods to nodes, favoring nodes with higher live CPU use.
+// Flow: find unassigned pods -> exclude cordoned nodes -> score nodes -> bind each pod -> refresh status.
+
 package scheduler
 
 import (
@@ -55,13 +58,13 @@ type ScheduledPod struct {
 
 type StatusSnapshot struct {
 	// Small scheduler summary for the dashboard.
-	LastRun        time.Time       `json:"lastRun"`
-	PendingPods    int             `json:"pendingPods"`
-	ScheduledPods  int             `json:"scheduledPods"`
-	Pressure       int64           `json:"pressure"`
-	Nodes          []NodeStatus    `json:"nodes"`
-	RecentBindings []BindingEvent  `json:"recentBindings"`
-	Pods           []ScheduledPod  `json:"pods"`
+	LastRun        time.Time      `json:"lastRun"`
+	PendingPods    int            `json:"pendingPods"`
+	ScheduledPods  int            `json:"scheduledPods"`
+	Pressure       int64          `json:"pressure"`
+	Nodes          []NodeStatus   `json:"nodes"`
+	RecentBindings []BindingEvent `json:"recentBindings"`
+	Pods           []ScheduledPod `json:"pods"`
 }
 
 // NodeScore holds a node and its computed score.
@@ -71,6 +74,7 @@ type NodeScore struct {
 	Score    int64
 }
 
+// NewScheduler creates the clients and starts with an empty dashboard snapshot.
 func NewScheduler() (*Scheduler, error) {
 	// Need normal K8s APIs plus metrics.k8s.io for scoring.
 	client, err := kubeutil.NewKubernetesClient()
@@ -110,6 +114,7 @@ func (s *Scheduler) Start(ctx context.Context) {
 	}
 }
 
+// scheduleAll attempts placement for every pod waiting for the Nimbus scheduler.
 func (s *Scheduler) scheduleAll(ctx context.Context) {
 	// Refresh status first so the UI still updates even when there are no pending pods.
 	s.refreshStatus(ctx)
@@ -140,6 +145,7 @@ func (s *Scheduler) scheduleAll(ctx context.Context) {
 	s.refreshStatus(ctx)
 }
 
+// schedulePod picks the highest CPU score among nodes that are not cordoned and asks Kubernetes to bind the pod.
 func (s *Scheduler) schedulePod(ctx context.Context, pod *corev1.Pod) error {
 	fmt.Printf("Finding best node for pod %s\n", pod.Name)
 
@@ -256,6 +262,7 @@ func (s *Scheduler) bindPod(ctx context.Context, pod *corev1.Pod, nodeName strin
 	return nil
 }
 
+// cpuUtilizationScore returns used CPU as a whole-number percentage of available CPU.
 func cpuUtilizationScore(usedCPUMilli, totalCPUMilli int64) int64 {
 	if totalCPUMilli == 0 {
 		return 0
@@ -263,6 +270,7 @@ func cpuUtilizationScore(usedCPUMilli, totalCPUMilli int64) int64 {
 	return (usedCPUMilli * 100) / totalCPUMilli
 }
 
+// refreshStatus gathers pod and node information and saves a dashboard snapshot under a lock.
 func (s *Scheduler) refreshStatus(ctx context.Context) {
 	// Read-only status collection for the dashboard. No scheduling here.
 	pendingPods, err := s.k8s.CoreV1().Pods("").List(ctx, metav1.ListOptions{
@@ -314,7 +322,8 @@ func (s *Scheduler) refreshStatus(ctx context.Context) {
 	scheduledPods := make([]ScheduledPod, 0, len(allSchedulerPods.Items))
 	activeScheduledPods := 0
 	for _, pod := range allSchedulerPods.Items {
-		// Tenant label comes from the controller, so reuse it here.
+		// Read the pod’s tenant label when present. Controller-created pod
+		// templates currently set only an app label, so this ID may be empty.
 		tenantID := pod.Labels["tenant"]
 		tenantName := pod.Namespace
 		if len(tenantName) > len("nimbus-") && tenantName[:len("nimbus-")] == "nimbus-" {
@@ -349,6 +358,7 @@ func (s *Scheduler) refreshStatus(ctx context.Context) {
 	s.status.Pods = scheduledPods
 }
 
+// recordBinding adds the newest placement to the front and keeps at most ten events.
 func (s *Scheduler) recordBinding(pod *corev1.Pod, nodeName string) {
 	// Keep a short rolling list so the scheduler page stays readable.
 	s.mu.Lock()
@@ -366,6 +376,7 @@ func (s *Scheduler) recordBinding(pod *corev1.Pod, nodeName string) {
 	}
 }
 
+// GetStatus copies the cached snapshot and its lists while holding a read lock.
 func (s *Scheduler) GetStatus() StatusSnapshot {
 	// Return a copy so callers do not mutate shared state by accident.
 	s.mu.RLock()

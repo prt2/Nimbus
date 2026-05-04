@@ -1,7 +1,10 @@
+// Checks CPU scoring and a small simulation of packing pods onto fewer nodes.
+
 package scheduler
 
 import "testing"
 
+// TestCPUUtilizationScorePrefersBusierNodes checks that higher CPU use produces a higher score.
 func TestCPUUtilizationScorePrefersBusierNodes(t *testing.T) {
 	quietNode := cpuUtilizationScore(200, 2000)
 	busyNode := cpuUtilizationScore(1400, 2000)
@@ -11,6 +14,8 @@ func TestCPUUtilizationScorePrefersBusierNodes(t *testing.T) {
 	}
 }
 
+// TestBinPackingConcentratesWorkloadsOntoFewerNodes simulates placing three pods and expects one active node.
+// This simulation checks capacity before scoring; it does not call the live Kubernetes scheduler.
 func TestBinPackingConcentratesWorkloadsOntoFewerNodes(t *testing.T) {
 	type node struct {
 		used  int64

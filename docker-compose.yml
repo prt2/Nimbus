@@ -1,3 +1,6 @@
+# Local stack: keep tenant data in Postgres, run the API, and serve the React dashboard.
+# The API uses the mounted local kubeconfig to reach an existing Kubernetes cluster.
+
 services:
   postgres:
     image: postgres:15
@@ -38,5 +41,6 @@ services:
     depends_on:
       - api
 
+# Keep database files between container restarts.
 volumes:
   postgres-data:

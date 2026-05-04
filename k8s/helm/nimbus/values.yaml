@@ -1,3 +1,5 @@
+# Settings read by the Helm templates; override them when installing or upgrading Nimbus.
+
 # Default values for Nimbus
 replicaCount: 1
 
@@ -17,6 +19,7 @@ database:
   user: nimbus
   password: nimbus123
 
+# Requests reserve resources for the API pod; limits cap how much it can use.
 resources:
   requests:
     cpu: 250m
@@ -29,6 +32,7 @@ service:
   type: ClusterIP
   port: 8080
 
+# Reserved ingress settings; this chart currently has no ingress template.
 ingress:
   enabled: false
   host: nimbus.local

@@ -1,3 +1,5 @@
+// Creates signed login tokens and checks tokens before protected requests reach the API.
+
 package middleware
 
 import (
@@ -17,18 +19,21 @@ type contextKey string
 
 const TenantKey contextKey = "tenant"
 
+// init loads the signing secret from the environment when this package starts.
 func init() {
 	if secret := os.Getenv("JWT_SECRET"); secret != "" {
 		jwtSecret = []byte(secret)
 	}
 }
 
+// SetJWTSecret replaces the signing secret when a non-empty value is supplied.
 func SetJWTSecret(secret string) {
 	if secret != "" {
 		jwtSecret = []byte(secret)
 	}
 }
 
+// GenerateToken signs tenant details in a token that expires after 24 hours.
 func GenerateToken(tenantID, tenantName string) (string, error) {
 	claims := jwt.MapClaims{
 		"tenant_id":   tenantID,
@@ -40,6 +45,7 @@ func GenerateToken(tenantID, tenantName string) (string, error) {
 	return token.SignedString(jwtSecret)
 }
 
+// Auth allows public routes through and validates bearer tokens for other routes.
 func Auth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Skip auth for health check, token endpoint, and metrics
@@ -78,11 +84,13 @@ func Auth(next http.Handler) http.Handler {
 	})
 }
 
+// ClaimsFromContext reads the token details attached by Auth to this request.
 func ClaimsFromContext(ctx context.Context) (jwt.MapClaims, bool) {
 	claims, ok := ctx.Value(TenantKey).(jwt.MapClaims)
 	return claims, ok
 }
 
+// TenantIDFromContext extracts a non-empty tenant ID or returns an error.
 func TenantIDFromContext(ctx context.Context) (string, error) {
 	claims, ok := ClaimsFromContext(ctx)
 	if !ok {
@@ -97,6 +105,7 @@ func TenantIDFromContext(ctx context.Context) (string, error) {
 	return tenantID, nil
 }
 
+// IsAdmin treats the special tenant ID "admin" as an administrator.
 func IsAdmin(ctx context.Context) bool {
 	tenantID, err := TenantIDFromContext(ctx)
 	return err == nil && tenantID == "admin"

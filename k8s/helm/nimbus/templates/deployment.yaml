@@ -1,3 +1,5 @@
+# Run API replicas using Helm settings, secret-backed credentials, and the Nimbus service account.
+
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -48,6 +50,7 @@ spec:
             limits:
               cpu: {{ .Values.resources.limits.cpu }}
               memory: {{ .Values.resources.limits.memory }}
+          # Ask Kubernetes to restart an unhealthy container and route traffic only when it is ready.
           livenessProbe:
             httpGet:
               path: /health

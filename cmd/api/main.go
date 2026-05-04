@@ -1,3 +1,6 @@
+// Starts the API and background workers, then connects each HTTP route to its handler.
+// Flow: read settings -> connect to Postgres and Kubernetes -> start workers -> serve requests.
+
 package main
 
 import (
@@ -30,6 +33,7 @@ type server struct {
 	scheduler   *scheduler.Scheduler
 }
 
+// main connects the services and starts the HTTP server and periodic workers.
 func main() {
 	// Load shared config first, then build the pieces that need DB/K8s access.
 	middleware.SetJWTSecret(os.Getenv("JWT_SECRET"))
@@ -105,10 +109,12 @@ func main() {
 	}
 }
 
+// healthHandler returns a simple response showing that the API is reachable.
 func healthHandler(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
+// handleToken reads a tenant ID and name and returns a signed token for them.
 func (s *server) handleToken(w http.ResponseWriter, r *http.Request) {
 	// Frontend grabs a token here before it does anything else.
 	if r.Method != http.MethodPost {
@@ -131,6 +137,7 @@ func (s *server) handleToken(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"token": token})
 }
 
+// handleTenants lists visible tenants or lets an admin create a tenant and its namespace.
 func (s *server) handleTenants(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
@@ -191,6 +198,7 @@ func (s *server) handleTenants(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// handleTenantByID returns one permitted tenant or lets an admin delete it.
 func (s *server) handleTenantByID(w http.ResponseWriter, r *http.Request) {
 	// Everything after /tenants/ is treated as the tenant ID.
 	id := strings.TrimPrefix(r.URL.Path, "/tenants/")
@@ -233,6 +241,7 @@ func (s *server) handleTenantByID(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// handleUsage returns accumulated usage, limited to the caller’s tenant unless they are admin.
 func (s *server) handleUsage(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
@@ -257,6 +266,7 @@ func (s *server) handleUsage(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]*billing.UsageRecord{tenantID: record})
 }
 
+// handleInvoice resolves a tenant ID or name, checks access, and calculates its invoice.
 func (s *server) handleInvoice(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
@@ -287,6 +297,7 @@ func (s *server) handleInvoice(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.billing.GenerateInvoice(tenantID))
 }
 
+// handleSchedulerStatus returns cached scheduler information and filters the pod list for tenants.
 func (s *server) handleSchedulerStatus(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
@@ -316,6 +327,7 @@ func (s *server) handleSchedulerStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, status)
 }
 
+// writeJSON sends an HTTP status and encodes the response body as JSON.
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 	// Small helper so handlers do not repeat the JSON boilerplate.
 	w.Header().Set("Content-Type", "application/json")
@@ -323,6 +335,7 @@ func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 	json.NewEncoder(w).Encode(v)
 }
 
+// metricsMiddleware measures how long each handled request takes and records its response status.
 func metricsMiddleware(next http.Handler) http.Handler {
 	// Track request count and latency for every route.
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -341,11 +354,13 @@ type responseWriter struct {
 	status int
 }
 
+// WriteHeader remembers the status code before forwarding it to the real response writer.
 func (rw *responseWriter) WriteHeader(status int) {
 	rw.status = status
 	rw.ResponseWriter.WriteHeader(status)
 }
 
+// dbConnStr builds a Postgres URL from environment settings, using local defaults when unset.
 func dbConnStr() string {
 	host := getenvDefault("DB_HOST", "127.0.0.1")
 	port := getenvDefault("DB_PORT", "5432")
@@ -367,6 +382,7 @@ func dbConnStr() string {
 	}).String()
 }
 
+// getenvDefault uses a fallback when an environment variable is empty or missing.
 func getenvDefault(key, fallback string) string {
 	if value := os.Getenv(key); value != "" {
 		return value
@@ -374,6 +390,7 @@ func getenvDefault(key, fallback string) string {
 	return fallback
 }
 
+// filterTenantsByID keeps only records whose ID matches the caller’s tenant.
 func filterTenantsByID(tenants []*tenant.Tenant, tenantID string) []*tenant.Tenant {
 	// Used when a tenant-scoped token should only see one record.
 	filtered := make([]*tenant.Tenant, 0, 1)
@@ -385,6 +402,7 @@ func filterTenantsByID(tenants []*tenant.Tenant, tenantID string) []*tenant.Tena
 	return filtered
 }
 
+// canAccessTenant allows an admin or the owner of this tenant to view the record.
 func canAccessTenant(ctx context.Context, t *tenant.Tenant) bool {
 	// Admin sees everything. Tenant tokens only get their own row.
 	if middleware.IsAdmin(ctx) {

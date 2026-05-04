@@ -1,3 +1,6 @@
+// Adjusts workload copy counts based on live CPU and memory use.
+// Flow: find Nimbus deployments -> compare usage with requested resources -> add or remove one copy.
+
 package autoscaler
 
 import (
@@ -28,6 +31,7 @@ type Autoscaler struct {
 	dynamic dynamic.Interface
 }
 
+// NewAutoscaler creates clients for deployments and live resource metrics.
 func NewAutoscaler() (*Autoscaler, error) {
 	// Same idea as the scheduler: normal APIs plus metrics access.
 	client, err := kubeutil.NewKubernetesClient()
@@ -43,6 +47,7 @@ func NewAutoscaler() (*Autoscaler, error) {
 	return &Autoscaler{k8s: client, dynamic: dynamicClient}, nil
 }
 
+// Start checks workloads immediately and every 30 seconds until the context is cancelled.
 func (a *Autoscaler) Start(ctx context.Context) {
 	// Check every 30 seconds whether replicas still make sense.
 	fmt.Println("Autoscaler starting...")
@@ -61,6 +66,7 @@ func (a *Autoscaler) Start(ctx context.Context) {
 	}
 }
 
+// reconcile finds namespaces marked as managed by Nimbus and checks each one.
 func (a *Autoscaler) reconcile(ctx context.Context) {
 	// Only look at namespaces Nimbus created.
 	namespaces, err := a.k8s.CoreV1().Namespaces().List(ctx, metav1.ListOptions{
@@ -75,6 +81,7 @@ func (a *Autoscaler) reconcile(ctx context.Context) {
 	}
 }
 
+// reconcileNamespace changes each managed deployment by at most one replica per check.
 func (a *Autoscaler) reconcileNamespace(ctx context.Context, namespace string) {
 	// Only touch deployments we created.
 	deployments, err := a.k8s.AppsV1().Deployments(namespace).
@@ -128,6 +135,7 @@ func (a *Autoscaler) reconcileNamespace(ctx context.Context, namespace string) {
 	}
 }
 
+// resourceUtilization adds up matching pod usage and requests, then returns CPU and memory percentages.
 func (a *Autoscaler) resourceUtilization(ctx context.Context, namespace string, deploy *appsv1.Deployment, replicas int32) (int32, int32, error) {
 	if replicas == 0 {
 		return 0, 0, nil
@@ -187,6 +195,7 @@ func (a *Autoscaler) resourceUtilization(ctx context.Context, namespace string, 
 	return cpuUtilization, memoryUtilization, nil
 }
 
+// maxInt32 returns the larger value so the busier resource controls scaling.
 func maxInt32(a, b int32) int32 {
 	if a > b {
 		return a
