@@ -14,6 +14,7 @@ type DBStore struct {
 }
 
 func NewDBStore(connStr string) (*DBStore, error) {
+	// sql.Open is lazy, so ping here and fail fast if Postgres is down.
 	db, err := sql.Open("postgres", connStr)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open db: %w", err)
@@ -30,6 +31,7 @@ func NewDBStore(connStr string) (*DBStore, error) {
 }
 
 func (s *DBStore) migrate() error {
+	// Keep bootstrap simple for local runs. Create tables if missing.
 	_, err := s.db.Exec(`
 		CREATE TABLE IF NOT EXISTS tenants (
 			id           TEXT PRIMARY KEY,
@@ -51,6 +53,7 @@ func (s *DBStore) migrate() error {
 }
 
 func (s *DBStore) Create(name, cpuQuota, memoryQuota string) (*Tenant, error) {
+	// Namespace naming stays predictable so the rest of the code can derive it.
 	t := &Tenant{
 		ID:          uuid.NewString(),
 		Name:        name,
@@ -71,6 +74,7 @@ func (s *DBStore) Create(name, cpuQuota, memoryQuota string) (*Tenant, error) {
 }
 
 func (s *DBStore) Get(id string) (*Tenant, error) {
+	// Normal lookup path from the API.
 	t := &Tenant{}
 	err := s.db.QueryRow(`
 		SELECT id, name, namespace, cpu_quota, memory_quota, created_at
@@ -83,6 +87,7 @@ func (s *DBStore) Get(id string) (*Tenant, error) {
 }
 
 func (s *DBStore) GetByName(name string) (*Tenant, error) {
+	// Handy for endpoints that accept either ID or name.
 	t := &Tenant{}
 	err := s.db.QueryRow(`
 		SELECT id, name, namespace, cpu_quota, memory_quota, created_at
@@ -95,6 +100,7 @@ func (s *DBStore) GetByName(name string) (*Tenant, error) {
 }
 
 func (s *DBStore) List() []*Tenant {
+	// Newest first reads a little better in the dashboard.
 	rows, err := s.db.Query(`
 		SELECT id, name, namespace, cpu_quota, memory_quota, created_at
 		FROM tenants ORDER BY created_at DESC`)
@@ -112,6 +118,7 @@ func (s *DBStore) List() []*Tenant {
 }
 
 func (s *DBStore) Delete(id string) error {
+	// By the time this runs, the namespace should already be gone.
 	res, err := s.db.Exec(`DELETE FROM tenants WHERE id = $1`, id)
 	if err != nil {
 		return err
@@ -124,6 +131,7 @@ func (s *DBStore) Delete(id string) error {
 }
 
 func (s *DBStore) SaveUsage(tenantID string, cpuMS, memMBS int64, podCount int) error {
+	// Billing samples stack up over time, so add to the total instead of replacing it.
 	_, err := s.db.Exec(`
 		INSERT INTO usage_records (tenant_id, cpu_milli_seconds, memory_mb_seconds, pod_count, last_updated)
 		VALUES ($1, $2, $3, $4, $5)

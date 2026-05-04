@@ -18,6 +18,7 @@ import (
 // CPU is tracked in millicore-seconds, memory in megabyte-seconds.
 // These get converted to cost at invoice time.
 type UsageRecord struct {
+	// Running totals for the billing loop.
 	TenantID        string
 	TenantName      string
 	CPUMilliSeconds int64 // total CPU milliseconds consumed
@@ -47,6 +48,7 @@ const (
 // Engine scrapes pod resource usage per tenant namespace
 // and accumulates billing data over time.
 type Engine struct {
+	// usage is what the API reads. usageStore persists the same numbers.
 	k8s        kubernetes.Interface
 	dynamic    dynamic.Interface
 	usageStore UsageStore
@@ -56,10 +58,12 @@ type Engine struct {
 }
 
 type UsageStore interface {
+	// Small interface so billing does not care how persistence is implemented.
 	SaveUsage(tenantID string, cpuMS, memMBS int64, podCount int) error
 }
 
 func NewEngine(store UsageStore) (*Engine, error) {
+	// Need the normal client plus metrics.k8s.io access.
 	client, err := kubeutil.NewKubernetesClient()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create k8s client: %w", err)
@@ -123,6 +127,7 @@ func (e *Engine) collect(ctx context.Context) {
 }
 
 func (e *Engine) collectTenant(ctx context.Context, tenantID, tenantName, namespace string) {
+	// Only count running pods here.
 	pods, err := e.k8s.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
 		FieldSelector: "status.phase=Running",
 	})
@@ -145,6 +150,7 @@ func (e *Engine) collectTenant(ctx context.Context, tenantID, tenantName, namesp
 	var memoryBytes int64
 
 	for _, pod := range pods.Items {
+		// Skip pods that do not have metrics yet. We will catch them on the next tick.
 		metric, ok := metricByPod[pod.Name]
 		if !ok {
 			continue
@@ -173,6 +179,7 @@ func (e *Engine) collectTenant(ctx context.Context, tenantID, tenantName, namesp
 	record.LastUpdated = time.Now()
 
 	if e.usageStore != nil {
+		// Persist every sample so a restart does not wipe the totals.
 		if err := e.usageStore.SaveUsage(tenantID, cpuMillis*intervalSeconds, memoryMB*intervalSeconds, len(pods.Items)); err != nil {
 			fmt.Printf("Billing: failed to persist usage for %s: %v\n", tenantID, err)
 		}
@@ -199,6 +206,7 @@ func (e *Engine) GetAllUsage() map[string]*UsageRecord {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 
+	// Return copies so callers cannot change shared records by accident.
 	copy := make(map[string]*UsageRecord)
 	for k, v := range e.usage {
 		record := *v
@@ -214,6 +222,7 @@ func (e *Engine) GenerateInvoice(tenantID string) *Invoice {
 	e.mu.RUnlock()
 
 	if !ok {
+		// Fresh tenants can exist before any usage shows up.
 		return &Invoice{TenantID: tenantID, Period: currentPeriod()}
 	}
 

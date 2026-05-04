@@ -20,6 +20,7 @@ type Provisioner struct {
 }
 
 func NewProvisioner() (*Provisioner, error) {
+	// Nothing fancy here, just the normal typed client.
 	client, err := kubeutil.NewKubernetesClient()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create k8s client: %w", err)
@@ -42,6 +43,7 @@ func (p *Provisioner) Provision(ctx context.Context, t *Tenant) error {
 }
 
 func (p *Provisioner) createNamespace(ctx context.Context, t *Tenant) error {
+	// Labels are how the other loops find Nimbus namespaces later.
 	ns := &corev1.Namespace{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: t.Namespace,
@@ -84,6 +86,7 @@ func (p *Provisioner) createResourceQuota(ctx context.Context, t *Tenant) error 
 // Deprovision cleans up all K8s resources when a tenant is deleted.
 // Deleting the namespace automatically deletes everything inside it.
 func (p *Provisioner) Deprovision(ctx context.Context, t *Tenant) error {
+	// Namespace delete is enough here. Everything inside goes with it.
 	err := p.k8s.CoreV1().Namespaces().Delete(ctx, t.Namespace, metav1.DeleteOptions{})
 	if err != nil && errors.IsNotFound(err) {
 		fmt.Printf("Tenant namespace %s already absent, removing tenant record\n", t.Namespace)

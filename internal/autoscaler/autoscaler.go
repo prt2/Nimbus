@@ -16,6 +16,7 @@ import (
 )
 
 const (
+	// Simple demo thresholds for now.
 	scaleUpThreshold   = 70
 	scaleDownThreshold = 30
 	maxReplicas        = 5
@@ -28,6 +29,7 @@ type Autoscaler struct {
 }
 
 func NewAutoscaler() (*Autoscaler, error) {
+	// Same idea as the scheduler: normal APIs plus metrics access.
 	client, err := kubeutil.NewKubernetesClient()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create k8s client: %w", err)
@@ -42,6 +44,7 @@ func NewAutoscaler() (*Autoscaler, error) {
 }
 
 func (a *Autoscaler) Start(ctx context.Context) {
+	// Check every 30 seconds whether replicas still make sense.
 	fmt.Println("Autoscaler starting...")
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
@@ -59,6 +62,7 @@ func (a *Autoscaler) Start(ctx context.Context) {
 }
 
 func (a *Autoscaler) reconcile(ctx context.Context) {
+	// Only look at namespaces Nimbus created.
 	namespaces, err := a.k8s.CoreV1().Namespaces().List(ctx, metav1.ListOptions{
 		LabelSelector: "managed-by=nimbus",
 	})
@@ -72,6 +76,7 @@ func (a *Autoscaler) reconcile(ctx context.Context) {
 }
 
 func (a *Autoscaler) reconcileNamespace(ctx context.Context, namespace string) {
+	// Only touch deployments we created.
 	deployments, err := a.k8s.AppsV1().Deployments(namespace).
 		List(ctx, metav1.ListOptions{
 			LabelSelector: "managed-by=nimbus",
@@ -86,6 +91,7 @@ func (a *Autoscaler) reconcileNamespace(ctx context.Context, namespace string) {
 			currentReplicas = *deploy.Spec.Replicas
 		}
 
+		// Use the hotter of CPU or memory for the decision.
 		cpuUtilization, memoryUtilization, err := a.resourceUtilization(ctx, namespace, &deploy, currentReplicas)
 		if err != nil {
 			fmt.Printf("Autoscaler: failed to compute utilization for %s/%s: %v\n", namespace, deploy.Name, err)
@@ -127,6 +133,7 @@ func (a *Autoscaler) resourceUtilization(ctx context.Context, namespace string, 
 		return 0, 0, nil
 	}
 
+	// Match pods back to this Deployment before reading usage.
 	selector := labels.SelectorFromSet(deploy.Spec.Selector.MatchLabels).String()
 	pods, err := a.k8s.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
 		LabelSelector: selector,
@@ -168,6 +175,7 @@ func (a *Autoscaler) resourceUtilization(ctx context.Context, namespace string, 
 
 	var cpuUtilization int32
 	if requestedCPUMilli > 0 {
+		// Compare live usage against the resources the pod asked for.
 		cpuUtilization = int32((usedCPUMilli * 100) / requestedCPUMilli)
 	}
 

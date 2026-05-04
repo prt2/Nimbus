@@ -21,6 +21,7 @@ const SchedulerName = "nimbus-scheduler"
 // Scheduler watches for unscheduled pods and places them on the best node.
 // "Best" means the node with the highest live CPU utilization.
 type Scheduler struct {
+	// status is just a cached snapshot for the API/frontend.
 	k8s     kubernetes.Interface
 	dynamic dynamic.Interface
 	mu      sync.RWMutex
@@ -28,12 +29,14 @@ type Scheduler struct {
 }
 
 type NodeStatus struct {
+	// Lightweight node view for the dashboard.
 	NodeName       string `json:"nodeName"`
 	CPUUtilization int64  `json:"cpuUtilization"`
 	Schedulable    bool   `json:"schedulable"`
 }
 
 type BindingEvent struct {
+	// Recent "pod -> node" decisions for the scheduler page.
 	PodName   string    `json:"podName"`
 	Namespace string    `json:"namespace"`
 	NodeName  string    `json:"nodeName"`
@@ -41,6 +44,7 @@ type BindingEvent struct {
 }
 
 type ScheduledPod struct {
+	// Pod-level state returned by /scheduler/status.
 	Name       string `json:"name"`
 	Namespace  string `json:"namespace"`
 	NodeName   string `json:"nodeName"`
@@ -50,6 +54,7 @@ type ScheduledPod struct {
 }
 
 type StatusSnapshot struct {
+	// Small scheduler summary for the dashboard.
 	LastRun        time.Time       `json:"lastRun"`
 	PendingPods    int             `json:"pendingPods"`
 	ScheduledPods  int             `json:"scheduledPods"`
@@ -67,6 +72,7 @@ type NodeScore struct {
 }
 
 func NewScheduler() (*Scheduler, error) {
+	// Need normal K8s APIs plus metrics.k8s.io for scoring.
 	client, err := kubeutil.NewKubernetesClient()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create k8s client: %w", err)
@@ -105,6 +111,7 @@ func (s *Scheduler) Start(ctx context.Context) {
 }
 
 func (s *Scheduler) scheduleAll(ctx context.Context) {
+	// Refresh status first so the UI still updates even when there are no pending pods.
 	s.refreshStatus(ctx)
 
 	// Find all pods that:
@@ -161,7 +168,7 @@ func (s *Scheduler) schedulePod(ctx context.Context, pod *corev1.Pod) error {
 	best := scores[0]
 	fmt.Printf("Selected node %s with score %d\n", best.NodeName, best.Score)
 
-	// Step 5: Bind the pod to that node
+	// Bind the pod, then keep a short event record for the UI.
 	if err := s.bindPod(ctx, pod, best.NodeName); err != nil {
 		return err
 	}
@@ -257,6 +264,7 @@ func cpuUtilizationScore(usedCPUMilli, totalCPUMilli int64) int64 {
 }
 
 func (s *Scheduler) refreshStatus(ctx context.Context) {
+	// Read-only status collection for the dashboard. No scheduling here.
 	pendingPods, err := s.k8s.CoreV1().Pods("").List(ctx, metav1.ListOptions{
 		FieldSelector: "spec.schedulerName=nimbus-scheduler,spec.nodeName=",
 	})
@@ -306,6 +314,7 @@ func (s *Scheduler) refreshStatus(ctx context.Context) {
 	scheduledPods := make([]ScheduledPod, 0, len(allSchedulerPods.Items))
 	activeScheduledPods := 0
 	for _, pod := range allSchedulerPods.Items {
+		// Tenant label comes from the controller, so reuse it here.
 		tenantID := pod.Labels["tenant"]
 		tenantName := pod.Namespace
 		if len(tenantName) > len("nimbus-") && tenantName[:len("nimbus-")] == "nimbus-" {
@@ -324,6 +333,7 @@ func (s *Scheduler) refreshStatus(ctx context.Context) {
 		}
 	}
 
+	// Just a simple dashboard signal, not a real cluster pressure metric.
 	pressure := int64(activeScheduledPods * 20)
 	if pressure > 100 {
 		pressure = 100
@@ -340,6 +350,7 @@ func (s *Scheduler) refreshStatus(ctx context.Context) {
 }
 
 func (s *Scheduler) recordBinding(pod *corev1.Pod, nodeName string) {
+	// Keep a short rolling list so the scheduler page stays readable.
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -356,6 +367,7 @@ func (s *Scheduler) recordBinding(pod *corev1.Pod, nodeName string) {
 }
 
 func (s *Scheduler) GetStatus() StatusSnapshot {
+	// Return a copy so callers do not mutate shared state by accident.
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 

@@ -20,6 +20,7 @@ import (
 )
 
 type ComputeRequestSpec struct {
+	// These are the fields users put on the CRD.
 	TenantID string `json:"tenantId"`
 	Image    string `json:"image"`
 	CPU      string `json:"cpu"`
@@ -28,6 +29,7 @@ type ComputeRequestSpec struct {
 }
 
 type ComputeRequestStatus struct {
+	// Keep a small status on the CR so it is obvious what happened.
 	Phase          string `json:"phase"`
 	DeploymentName string `json:"deploymentName"`
 	Message        string `json:"message"`
@@ -45,6 +47,7 @@ type Controller struct {
 	dynamic dynamic.Interface
 }
 
+// Identify the ComputeRequest resource in the Kubernetes API.
 var computeRequestGVR = schema.GroupVersionResource{
 	Group:    "nimbus.io",
 	Version:  "v1",
@@ -52,6 +55,7 @@ var computeRequestGVR = schema.GroupVersionResource{
 }
 
 func NewController() (*Controller, error) {
+	// Need typed client for Deployments and dynamic client for the CRD.
 	k8sClient, err := kubeutil.NewKubernetesClient()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create k8s client: %w", err)
@@ -66,6 +70,7 @@ func NewController() (*Controller, error) {
 }
 
 func (c *Controller) Start(ctx context.Context) {
+	// Simple polling loop for now. Recheck everything every 10 seconds.
 	fmt.Println("ComputeRequest controller starting...")
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
@@ -83,6 +88,7 @@ func (c *Controller) Start(ctx context.Context) {
 }
 
 func (c *Controller) reconcileAll(ctx context.Context) {
+	// Pull all requests and reconcile them one at a time.
 	list, err := c.dynamic.Resource(computeRequestGVR).
 		Namespace("").
 		List(ctx, metav1.ListOptions{})
@@ -91,7 +97,7 @@ func (c *Controller) reconcileAll(ctx context.Context) {
 		return
 	}
 
-	fmt.Printf("🔄 Reconciling %d ComputeRequest(s)...\n", len(list.Items))
+	fmt.Printf("Reconciling %d ComputeRequest(s)...\n", len(list.Items))
 
 	for _, item := range list.Items {
 		data, _ := json.Marshal(item.Object)
@@ -105,6 +111,7 @@ func (c *Controller) reconcileAll(ctx context.Context) {
 }
 
 func (c *Controller) reconcile(ctx context.Context, cr *ComputeRequest) {
+	// Keep names deterministic so reconcile can find the same objects later.
 	namespace := "nimbus-" + cr.Spec.TenantID
 	deploymentName := "nimbus-" + cr.Name
 
@@ -112,6 +119,7 @@ func (c *Controller) reconcile(ctx context.Context, cr *ComputeRequest) {
 		Get(ctx, deploymentName, metav1.GetOptions{})
 
 	if errors.IsNotFound(err) {
+		// No Deployment yet means we need to create it now.
 		fmt.Printf("Creating deployment %s in %s\n", deploymentName, namespace)
 		if err := c.createDeployment(ctx, cr, namespace, deploymentName); err != nil {
 			fmt.Printf("Failed to create deployment: %v\n", err)
@@ -123,11 +131,13 @@ func (c *Controller) reconcile(ctx context.Context, cr *ComputeRequest) {
 	} else if err != nil {
 		fmt.Printf("Error checking deployment: %v\n", err)
 	} else {
+		// This controller only creates right now. It does not patch existing Deployments.
 		fmt.Printf("Deployment %s already exists\n", deploymentName)
 	}
 }
 
 func (c *Controller) createDeployment(ctx context.Context, cr *ComputeRequest, namespace, name string) error {
+	// Default to one replica if the CR leaves it empty.
 	replicas := cr.Spec.Replicas
 	if replicas == 0 {
 		replicas = 1
@@ -182,6 +192,7 @@ func (c *Controller) createDeployment(ctx context.Context, cr *ComputeRequest, n
 }
 
 func (c *Controller) updateStatus(ctx context.Context, cr *ComputeRequest, phase, deploymentName, message string) {
+	// Patch status separately so the CR shows what reconcile just did.
 	patch := map[string]interface{}{
 		"status": map[string]interface{}{
 			"phase":          phase,

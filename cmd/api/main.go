@@ -23,6 +23,7 @@ import (
 )
 
 type server struct {
+	// Keep the shared services here so handlers can stay thin.
 	tenants     *tenant.DBStore
 	provisioner *tenant.Provisioner
 	billing     *billing.Engine
@@ -30,6 +31,7 @@ type server struct {
 }
 
 func main() {
+	// Load shared config first, then build the pieces that need DB/K8s access.
 	middleware.SetJWTSecret(os.Getenv("JWT_SECRET"))
 
 	dbStore, err := tenant.NewDBStore(dbConnStr())
@@ -63,6 +65,7 @@ func main() {
 	}
 
 	ctx := context.Background()
+	// These run in the background the whole time the API is up.
 	go ctrl.Start(ctx)
 	go sched.Start(ctx)
 	go billingEngine.Start(ctx)
@@ -76,6 +79,7 @@ func main() {
 	}
 
 	mux := http.NewServeMux()
+	// Small API surface for the dashboard and local testing.
 	mux.HandleFunc("/health", healthHandler)
 	mux.HandleFunc("/auth/token", srv.handleToken)
 	mux.HandleFunc("/tenants", srv.handleTenants)
@@ -85,6 +89,7 @@ func main() {
 	mux.HandleFunc("/scheduler/status", srv.handleSchedulerStatus)
 	mux.Handle("/metrics", promhttp.Handler())
 
+	// CORS first for the frontend, auth around the protected routes, metrics last.
 	handler := middleware.CORS(middleware.Auth(metricsMiddleware(mux)))
 
 	httpServer := &http.Server{
@@ -105,6 +110,7 @@ func healthHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) handleToken(w http.ResponseWriter, r *http.Request) {
+	// Frontend grabs a token here before it does anything else.
 	if r.Method != http.MethodPost {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
@@ -128,6 +134,7 @@ func (s *server) handleToken(w http.ResponseWriter, r *http.Request) {
 func (s *server) handleTenants(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
+		// Dashboard hits this a lot, so keep the response simple.
 		tenants := s.tenants.List()
 		// Non-admin callers only see their own tenant record.
 		if !middleware.IsAdmin(r.Context()) {
@@ -143,6 +150,7 @@ func (s *server) handleTenants(w http.ResponseWriter, r *http.Request) {
 			"count":   len(tenants),
 		})
 	case http.MethodPost:
+		// Create the DB row first, then make the namespace/quota in the cluster.
 		if !middleware.IsAdmin(r.Context()) {
 			writeJSON(w, http.StatusForbidden, map[string]string{"error": "only admin can create tenants"})
 			return
@@ -171,6 +179,7 @@ func (s *server) handleTenants(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
 			return
 		}
+		// Roll back the DB row if the cluster step fails.
 		if err := s.provisioner.Provision(context.Background(), t); err != nil {
 			_ = s.tenants.Delete(t.ID)
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -183,6 +192,7 @@ func (s *server) handleTenants(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) handleTenantByID(w http.ResponseWriter, r *http.Request) {
+	// Everything after /tenants/ is treated as the tenant ID.
 	id := strings.TrimPrefix(r.URL.Path, "/tenants/")
 	if id == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing tenant id"})
@@ -190,6 +200,7 @@ func (s *server) handleTenantByID(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case http.MethodGet:
+		// Fetch first, then check whether this caller can see it.
 		t, err := s.tenants.Get(id)
 		if err != nil {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
@@ -201,6 +212,7 @@ func (s *server) handleTenantByID(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, t)
 	case http.MethodDelete:
+		// Tear down cluster state first, then drop the tenant row.
 		if !middleware.IsAdmin(r.Context()) {
 			writeJSON(w, http.StatusForbidden, map[string]string{"error": "only admin can delete tenants"})
 			return
@@ -238,6 +250,7 @@ func (s *server) handleUsage(w http.ResponseWriter, r *http.Request) {
 	}
 	record := s.billing.GetUsage(tenantID)
 	if record == nil {
+		// No usage yet is normal for a fresh tenant.
 		writeJSON(w, http.StatusOK, map[string]*billing.UsageRecord{})
 		return
 	}
@@ -254,6 +267,7 @@ func (s *server) handleInvoice(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing tenant id"})
 		return
 	}
+	// Accept either tenant ID or name here. Makes the UI and curl calls easier.
 	if t, err := s.tenants.Get(tenantID); err == nil {
 		tenantID = t.ID
 	} else if t, err := s.tenants.GetByName(tenantID); err == nil {
@@ -285,6 +299,7 @@ func (s *server) handleSchedulerStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Tenant tokens should only see their own scheduler view.
 	tenantID, err := middleware.TenantIDFromContext(r.Context())
 	if err != nil {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
@@ -302,12 +317,14 @@ func (s *server) handleSchedulerStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {
+	// Small helper so handlers do not repeat the JSON boilerplate.
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(v)
 }
 
 func metricsMiddleware(next http.Handler) http.Handler {
+	// Track request count and latency for every route.
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		rw := &responseWriter{ResponseWriter: w, status: 200}
@@ -358,6 +375,7 @@ func getenvDefault(key, fallback string) string {
 }
 
 func filterTenantsByID(tenants []*tenant.Tenant, tenantID string) []*tenant.Tenant {
+	// Used when a tenant-scoped token should only see one record.
 	filtered := make([]*tenant.Tenant, 0, 1)
 	for _, t := range tenants {
 		if t.ID == tenantID {
@@ -368,6 +386,7 @@ func filterTenantsByID(tenants []*tenant.Tenant, tenantID string) []*tenant.Tena
 }
 
 func canAccessTenant(ctx context.Context, t *tenant.Tenant) bool {
+	// Admin sees everything. Tenant tokens only get their own row.
 	if middleware.IsAdmin(ctx) {
 		return true
 	}
