@@ -1,203 +1,99 @@
 # Nimbus
 
-Nimbus is a small multi-tenant Kubernetes control plane written in Go.
+Nimbus is a small Go app for running workloads for different users or teams on Kubernetes. Each team, called a **tenant**, gets its own namespace: a separate area for its apps, with CPU and memory limits.
 
-It does four main things:
+You can use the React dashboard to create tenants, see which apps are running, and view resource usage and estimated costs. Nimbus chooses where apps run and adjusts the number of running copies as resource use changes. PostgreSQL stores tenant details and usage samples.
 
-- Creates one Kubernetes namespace per tenant and applies resource quotas.
-- Watches a `ComputeRequest` CRD and creates workloads for it.
-- Schedules those workloads with a custom bin-packing scheduler.
-- Tracks tenant CPU and memory usage for autoscaling and billing.
+## Run locally
 
-The repo also includes a React dashboard, Helm chart, Docker setup, and basic Prometheus/Grafana manifests.
+You'll need:
 
-## Stack
+- Go 1.25 or newer
+- Node.js 22 and npm (the frontend Docker image also uses Node 22)
+- Docker running, with Docker Compose available
+- `kubectl` and [kind](https://kind.sigs.k8s.io/) for a local Kubernetes cluster
 
-- Go
-- Kubernetes
-- PostgreSQL
-- React
-- Docker
-- Helm
-- Prometheus and Grafana
+Run the commands below from the project folder unless a step says otherwise.
 
-## Project Layout
+### 1. Prepare Kubernetes
 
-```text
-cmd/api/main.go                  API entrypoint
-internal/tenant/                 tenant storage and namespace provisioning
-internal/controller/             ComputeRequest controller
-internal/scheduler/              custom scheduler
-internal/autoscaler/             autoscaling loop
-internal/billing/                usage collection and invoicing
-internal/middleware/             JWT auth and CORS
-internal/kubeutil/               shared Kubernetes and metrics helpers
-frontend/                        React dashboard
-k8s/crds/                        ComputeRequest CRD
-k8s/helm/nimbus/                 Helm chart
-k8s/monitoring/                  Prometheus and Grafana manifests
-```
-
-## How It Works
-
-### Tenants
-
-Tenants are stored in PostgreSQL.  
-When a tenant is created through the API, Nimbus:
-
-- writes the tenant record to Postgres
-- creates a Kubernetes namespace
-- applies a `ResourceQuota` for CPU, memory, and pod count
-
-### Workloads
-
-Workloads are defined through a `ComputeRequest` custom resource.
-
-The controller checks for new requests every 10 seconds. If the matching Deployment does not exist yet, it creates one in the tenant namespace.
-
-### Scheduler
-
-Workloads created by the controller use `nimbus-scheduler`.
-
-The scheduler checks for pending pods every 5 seconds. It scores nodes by live CPU utilization from `metrics.k8s.io` and picks the busiest schedulable node first. That gives the scheduler a bin-packing bias instead of spreading pods evenly.
-
-### Autoscaling
-
-The autoscaler checks Nimbus-managed Deployments every 30 seconds.
-
-It compares live CPU and memory usage against the resources requested by the running pods:
-
-- scale up at 70% or higher
-- scale down at 30% or lower
-- keep replicas between 1 and 5
-
-### Billing
-
-The billing engine collects live pod CPU and memory usage every 30 seconds.
-
-It stores accumulated tenant usage in memory and also persists usage totals to PostgreSQL. Invoices are generated through the API from the accumulated usage records.
-
-### Authentication
-
-The API uses JWT tokens signed with HS256.
-
-- `/auth/token` issues a token
-- most API routes require `Authorization: Bearer <token>`
-- admin tokens can view all tenants
-- non-admin tokens are scoped to their own tenant
-
-## Prerequisites
-
-- Go 1.21+
-- Node.js 18+
-- Docker
-- kubectl
-- kind or another Kubernetes cluster
-- PostgreSQL
-- metrics-server installed in the cluster
-
-## Run Locally
-
-### 1. Start a cluster
+Create a local cluster. If you already have one, skip the first command and check that `kubectl` points to it.
 
 ```bash
 kind create cluster --name nimbus
+kubectl get nodes
 kubectl apply -f k8s/crds/computerequest.yaml
+```
+
+The last command teaches Kubernetes about `ComputeRequest`, the file format Nimbus uses to request an app.
+
+Install Metrics Server so Nimbus can read CPU and memory usage. Skip this if it is already installed.
+
+```bash
 kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
 ```
 
-The metrics server is required for:
-
-- scheduler node scoring
-- autoscaling
-- billing
-
-### 2. Start PostgreSQL
-
-If PostgreSQL is already installed locally:
+For a local kind cluster, add this setting to let Metrics Server connect without checking the node's certificate. Use it only for local development.
 
 ```bash
-psql postgresql://localhost:5432/postgres -c "CREATE USER nimbus WITH PASSWORD 'nimbus123';"
-psql postgresql://localhost:5432/postgres -c "CREATE DATABASE nimbus OWNER nimbus;"
+kubectl patch deployment metrics-server -n kube-system --type=json \
+  -p='[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--kubelet-insecure-tls"}]'
 ```
 
-Or run it in Docker:
+Wait for it to start, then check that usage readings are available:
 
 ```bash
-docker run -d \
-  --name nimbus-postgres \
-  -e POSTGRES_USER=nimbus \
-  -e POSTGRES_PASSWORD=nimbus123 \
-  -e POSTGRES_DB=nimbus \
-  -p 5432:5432 \
-  postgres:15
+kubectl rollout status deployment/metrics-server -n kube-system --timeout=120s
+kubectl top nodes
 ```
+
+Readings can take a minute to appear. For an existing cluster, check the [Metrics Server requirements and supported Kubernetes versions](https://github.com/kubernetes-sigs/metrics-server#requirements).
+
+### 2. Start the database
+
+```bash
+docker compose up -d postgres
+docker compose exec postgres pg_isready -U nimbus -d nimbus
+```
+
+Wait until the second command reports that Postgres is accepting connections. This creates the database with the login details the API expects by default. Its data is kept in a Docker volume between restarts.
 
 ### 3. Start the API
 
 ```bash
-go mod tidy
-go run cmd/api/main.go
+go run ./cmd/api
 ```
 
-The API reads these environment variables if set:
+Leave this terminal open. The API creates its database tables on startup and listens at `http://localhost:8080`.
 
-- `DB_HOST`
-- `DB_PORT`
-- `DB_NAME`
-- `DB_USER`
-- `DB_PASSWORD`
-- `DB_SSLMODE`
-- `JWT_SECRET`
-- `KUBECONFIG`
+In another terminal, check that it responds:
 
-### 4. Start the frontend
+```bash
+curl http://localhost:8080/health
+```
+
+You should see `{"status":"ok"}`.
+
+### 4. Start the dashboard
+
+In another terminal:
 
 ```bash
 cd frontend
-npm install
+npm ci
 npm start
 ```
 
-Frontend URL:
+Open [localhost:3000](http://localhost:3000). The dashboard connects to the local API and refreshes every 15 seconds.
 
-```text
-http://localhost:3000
-```
+## Try an app
 
-## End-to-End Demo
+In the dashboard, open **Tenants** and create a tenant named `tenant-a`. Keep the default CPU limit (`500m`, or half a CPU core) and memory limit (`512Mi`, or 512 MiB).
 
-This is the quickest way to make the dashboard show real activity.
-
-### 1. Create an admin token
+Creating a tenant sets up its namespace and limits. To run an app inside it, paste this command into a terminal:
 
 ```bash
-TOKEN=$(curl -s -X POST http://localhost:8080/auth/token \
-  -H 'Content-Type: application/json' \
-  -d '{"tenant_id":"admin","tenant_name":"admin"}' | jq -r .token)
-```
-
-### 2. Create a tenant
-
-```bash
-curl -s -X POST http://localhost:8080/tenants \
-  -H "Authorization: Bearer $TOKEN" \
-  -H 'Content-Type: application/json' \
-  -d '{"name":"tenant-a","cpu_quota":"500m","memory_quota":"512Mi"}'
-```
-
-Verify it:
-
-```bash
-kubectl get ns nimbus-tenant-a
-kubectl get resourcequota -n nimbus-tenant-a
-curl -s http://localhost:8080/tenants -H "Authorization: Bearer $TOKEN"
-```
-
-### 3. Create a workload for that tenant
-
-```bash
-kubectl apply -f - <<'EOF'
+kubectl apply -f - <<'YAML'
 apiVersion: nimbus.io/v1
 kind: ComputeRequest
 metadata:
@@ -209,187 +105,94 @@ spec:
   cpu: "200m"
   memory: "256Mi"
   replicas: 1
-EOF
+YAML
 ```
 
-Verify it:
+This asks Nimbus to run one copy of nginx with 0.2 CPU cores and 256 MiB of memory. In this request, `tenantId` must match the tenant's **name** (`tenant-a`), even though the field is called an ID.
+
+Nimbus checks for new requests every 10 seconds. Check the result with:
 
 ```bash
-kubectl get computerequest -n nimbus-tenant-a
-kubectl get deployment -n nimbus-tenant-a
-kubectl get pods -n nimbus-tenant-a -o wide
+kubectl get deployments,pods -n nimbus-tenant-a -o wide
 ```
 
-Expected result:
+Once the pod is running, the dashboard should start showing activity. Usage and invoice amounts update after a billing sample, usually within 30–60 seconds. The example runs nginx inside the cluster; it does not create a public web address.
 
-- the controller creates `deployment/nimbus-web-server`
-- the pod starts in `nimbus-tenant-a`
-- the pod uses `nimbus-scheduler`
-- the scheduler binds it to a node
+To remove the example, delete `tenant-a` from the dashboard. This also deletes its namespace and everything inside it.
 
-You can check the scheduler assignment directly:
+## If something isn't working
+
+- **The dashboard shows a connection error:** check that the API is running and that `/health` responds.
+- **The API cannot connect to Postgres:** check that the database is accepting connections and port 5432 is free.
+- **The API cannot connect to Kubernetes:** run `kubectl get nodes` and check your selected cluster. Nimbus uses `KUBECONFIG` when set, otherwise in-cluster credentials or `~/.kube/config`.
+- **A tenant shows no activity:** make sure you created a `ComputeRequest` and its pod is running. A tenant alone has no apps.
+- **Usage stays empty:** run `kubectl top pods -n nimbus-tenant-a`. Nimbus needs Metrics Server readings for usage, scaling, and node scores.
+- **A pod won't start:** run `kubectl describe pod -n nimbus-tenant-a <pod-name>` to see the reason, such as an image download error or a resource limit.
+
+## Settings
+
+The local setup works with these API defaults. Set environment variables before starting the API to change them.
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `DB_HOST` | `127.0.0.1` | Database address |
+| `DB_PORT` | `5432` | Database port |
+| `DB_NAME` | `nimbus` | Database name |
+| `DB_USER` | `nimbus` | Database user |
+| `DB_PASSWORD` | `nimbus123` | Database password |
+| `DB_SSLMODE` | `disable` | Database connection encryption setting |
+| `JWT_SECRET` | Built-in demo key | Key used to sign login tokens |
+| `KUBECONFIG` | See connection order above | Kubernetes connection file |
+
+The dashboard uses `http://localhost:8080` for the API. Set `REACT_APP_API_URL` before starting or building the frontend to use another address.
+
+## API reference
+
+The dashboard requests an admin token automatically. For direct API calls, get one with:
 
 ```bash
-kubectl get pod -n nimbus-tenant-a -o jsonpath='{range .items[*]}{.metadata.name}{"  scheduler="}{.spec.schedulerName}{"  node="}{.spec.nodeName}{"\n"}{end}'
+curl -s http://localhost:8080/auth/token \
+  -H 'Content-Type: application/json' \
+  -d '{"tenant_id":"admin","tenant_name":"admin"}'
 ```
 
-### 4. Refresh the frontend
+Copy the returned token and send it as `Authorization: Bearer <token>` on protected routes.
 
-Open `http://localhost:3000` and click `Refresh`.
+| Route | Purpose |
+| --- | --- |
+| `GET /health` | Check that the API is running |
+| `POST /auth/token` | Create a login token |
+| `GET /tenants` | List tenants |
+| `POST /tenants` | Create a tenant with `name`, `cpu_quota`, and `memory_quota` |
+| `GET /tenants/:id` | Get one tenant by its generated ID |
+| `DELETE /tenants/:id` | Delete a tenant and its namespace |
+| `GET /billing/usage` | Get accumulated usage |
+| `GET /billing/invoice/:tenant` | Get an estimated invoice by tenant ID or name |
+| `GET /scheduler/status` | See pod placements and node scores |
+| `GET /metrics` | Read Prometheus metrics |
 
-What should update:
+Health, token creation, and metrics are public. Creating and deleting tenants requires an admin token.
 
-- `Tenants`: `tenant-a` appears
-- `Workloads`: tenant is no longer idle
-- `Overview`: pod count is above 0
-- `Scheduler`: scheduled pod, node score, and recent binding appear
-- `Billing`: usage starts showing after the next billing loop
-
-### 5. Wait for billing
-
-The billing engine samples usage every 30 seconds.
-
-After about 30 to 60 seconds:
-
-```bash
-curl -s http://localhost:8080/billing/usage \
-  -H "Authorization: Bearer $TOKEN"
-
-curl -s http://localhost:8080/billing/invoice/tenant-a \
-  -H "Authorization: Bearer $TOKEN"
-```
-
-Expected result:
-
-- `CPUMilliSeconds` and `MemoryMBSeconds` start increasing
-- invoice totals become non-zero
-
-### 6. Optional: watch it live
-
-```bash
-kubectl get pods -n nimbus-tenant-a -w
-```
-
-## What To Check In The UI
-
-If everything is working, the dashboard should show:
-
-- `Overview`: `Tenants = 1`, `Active Tenants = 1`, `Pods = 1`
-- `Workloads`: `tenant-a` with `1 pod`
-- `Scheduler`: one scheduled pod and one recent binding
-- `Billing`: one usage record and a non-zero invoice after the billing loop runs
-
-## Why The Dashboard Can Look Empty
-
-If the tenant exists but the pages still show zeros, the usual reason is:
-
-- you created a tenant, but not a workload
-
-A tenant only creates:
-
-- a Postgres record
-- a Kubernetes namespace
-- a `ResourceQuota`
-
-It does not create a pod by itself.  
-To make `Overview`, `Workloads`, `Scheduler`, and `Billing` show activity, you need a `ComputeRequest`.
-
-## Run With Docker Compose
-
-```bash
-docker compose up --build
-```
-
-This starts:
-
-- PostgreSQL
-- the Go API
-- the React frontend
-
-The compose setup mounts your local kubeconfig into the API container so it can still talk to the cluster.
-
-## API
-
-### Get a token
-
-```http
-POST /auth/token
-Content-Type: application/json
-```
-
-Example body:
-
-```json
-{
-  "tenant_id": "admin",
-  "tenant_name": "admin"
-}
-```
-
-### Tenant routes
+## Project files
 
 ```text
-GET    /tenants
-POST   /tenants
-GET    /tenants/:id
-DELETE /tenants/:id
+cmd/api/               Starts the API and background tasks
+internal/tenant/       Tenant records and namespace setup
+internal/controller/   Turns app requests into running deployments
+internal/scheduler/    Chooses a node for each waiting pod
+internal/autoscaler/   Adjusts the number of app copies
+internal/billing/      Collects usage and calculates costs
+internal/middleware/   Checks tokens and handles browser access
+internal/kubeutil/     Shared Kubernetes connection and metrics helpers
+internal/metrics/      Defines Prometheus measurements
+frontend/              React dashboard
+k8s/                   Kubernetes setup, Helm chart, and monitoring files
 ```
 
-### Billing routes
+## Current limits
 
-```text
-GET /billing/usage
-GET /billing/invoice/:tenant
-```
+This is a local demo. The token endpoint accepts tenant details without a password, and the dashboard uses an admin token. Real authentication is needed before sharing it as a hosted service.
 
-### Metrics
+Invoice amounts use demo prices. Usage samples are saved to Postgres, but the API's usage and invoice totals start over when it restarts.
 
-```text
-GET /metrics
-```
-
-## Example ComputeRequest
-
-```yaml
-apiVersion: nimbus.io/v1
-kind: ComputeRequest
-metadata:
-  name: my-service
-  namespace: nimbus-acme
-spec:
-  tenantId: acme
-  image: nginx
-  cpu: "200m"
-  memory: "256Mi"
-  replicas: 1
-```
-
-Apply it with:
-
-```bash
-kubectl apply -f my-request.yaml
-```
-
-## Monitoring
-
-If you want Prometheus and Grafana locally:
-
-```bash
-helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
-helm repo update
-helm install monitoring prometheus-community/kube-prometheus-stack \
-  --namespace monitoring \
-  --create-namespace \
-  --set grafana.adminPassword=nimbus123
-
-kubectl apply -f k8s/monitoring/servicemonitor.yaml
-kubectl apply -f k8s/monitoring/grafana-dashboard.yaml
-```
-
-## Helm
-
-```bash
-helm install nimbus k8s/helm/nimbus
-helm upgrade nimbus k8s/helm/nimbus --set image.tag=v2
-helm uninstall nimbus
-```
+The scheduler favors nodes that already have higher CPU use. It skips nodes marked unavailable for scheduling, but does not check whether a pod's resources fit. Scaling checks run every 30 seconds and keep apps between one and five copies. Editing a `ComputeRequest` does not update an existing deployment.
